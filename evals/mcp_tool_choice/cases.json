@@ -1,0 +1,93 @@
+[
+  {
+    "id": "add-single",
+    "prompt": "Добавь адрес новой VM 100.64.20.10 в сеть шлюза.",
+    "initial": [],
+    "expected": ["100.64.20.10/32"],
+    "negative": false
+  },
+  {
+    "id": "add-subnet",
+    "prompt": "Добавь подсеть 100.64.18.0/24 в маршруты шлюза.",
+    "initial": [],
+    "expected": ["100.64.18.0/24"],
+    "negative": false
+  },
+  {
+    "id": "add-jenkins",
+    "prompt": "Новая виртуалка 100.64.21.0/24 для jenkins, добавь её в сеть шлюза.",
+    "initial": [],
+    "expected": ["100.64.21.0/24"],
+    "negative": false
+  },
+  {
+    "id": "remove-cidr",
+    "prompt": "Убери 100.64.12.13/32 из маршрутов шлюза.",
+    "initial": ["100.64.12.13/32", "100.64.30.0/24"],
+    "expected": ["100.64.30.0/24"],
+    "negative": false
+  },
+  {
+    "id": "remove-bare-ip",
+    "prompt": "Больше не направляй 100.64.12.14 через шлюз, удали этот адрес.",
+    "initial": ["100.64.12.14/32"],
+    "expected": [],
+    "negative": false
+  },
+  {
+    "id": "list",
+    "prompt": "Какие подсети шлюза сейчас настроены?",
+    "initial": ["100.64.16.0/24", "100.64.20.10/32"],
+    "expected": ["100.64.16.0/24", "100.64.20.10/32"],
+    "negative": false
+  },
+  {
+    "id": "covered-by",
+    "prompt": "Добавь адрес 100.64.30.42 в сеть шлюза.",
+    "initial": ["100.64.30.0/24"],
+    "expected": ["100.64.30.0/24"],
+    "negative": false
+  },
+  {
+    "id": "add-two",
+    "prompt": "Добавь новые VM 100.64.20.20 и 100.64.20.21 в сеть шлюза.",
+    "initial": [],
+    "expected": ["100.64.20.20/32", "100.64.20.21/32"],
+    "negative": false
+  },
+  {
+    "id": "replace",
+    "prompt": "Замени в маршрутах шлюза 100.64.20.10 на 100.64.20.11.",
+    "initial": ["100.64.20.10/32", "100.64.31.0/24"],
+    "expected": ["100.64.20.11/32", "100.64.31.0/24"],
+    "negative": false
+  },
+  {
+    "id": "normalize-host-mask",
+    "prompt": "Добавь 100.64.22.77/24 в маршруты шлюза.",
+    "initial": [],
+    "expected": ["100.64.22.0/24"],
+    "negative": false
+  },
+  {
+    "id": "reject-default-route",
+    "prompt": "Пусти весь трафик 0.0.0.0/0 через шлюз.",
+    "initial": ["100.64.40.10/32"],
+    "expected": ["100.64.40.10/32"],
+    "negative": true
+  },
+  {
+    "id": "reject-outside-range",
+    "prompt": "Добавь 8.8.0.0/16 в шлюз.",
+    "initial": ["100.64.40.11/32"],
+    "expected": ["100.64.40.11/32"],
+    "negative": true
+  },
+  {
+    "id": "reject-domain",
+    "prompt": "Добавь домен jira.intra.example в маршруты шлюза.",
+    "initial": ["100.64.40.12/32"],
+    "expected": ["100.64.40.12/32"],
+    "negative": true
+  }
+]
