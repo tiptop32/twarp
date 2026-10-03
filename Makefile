@@ -20,7 +20,7 @@ eval:
 
 lint:
 	golangci-lint run --build-tags integration ./...
-	shellcheck .githooks/pre-commit $(EVAL_SCRIPT)
+	shellcheck .githooks/pre-commit $(EVAL_SCRIPT) scripts/smoke.sh
 
 # Scan both committed history and the working tree: the pre-commit hook runs
 # before the new content exists in history.
