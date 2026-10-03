@@ -14,8 +14,8 @@ func TestReadPrefixesWithoutLockDoesNotCreateFiles(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	stateFile := filepath.Join(dir, "corp-ips.json")
-	lockFile := filepath.Join(dir, "corp-ips.lock")
+	stateFile := filepath.Join(dir, "gateway-ips.json")
+	lockFile := filepath.Join(dir, "gateway-ips.lock")
 	prefixes, err := ReadPrefixes(stateFile, lockFile)
 	if err != nil {
 		t.Fatalf("ReadPrefixes() error = %v", err)
@@ -35,11 +35,11 @@ func TestReadPrefixesValidatesState(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	stateFile := filepath.Join(dir, "corp-ips.json")
+	stateFile := filepath.Join(dir, "gateway-ips.json")
 	if err := os.WriteFile(stateFile, []byte("{broken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ReadPrefixes(stateFile, filepath.Join(dir, "corp-ips.lock"))
+	_, err := ReadPrefixes(stateFile, filepath.Join(dir, "gateway-ips.lock"))
 	if err == nil || !strings.Contains(err.Error(), "decode state") {
 		t.Fatalf("ReadPrefixes() error = %v, want decode state error", err)
 	}
@@ -57,7 +57,7 @@ func TestReadPrefixesWaitsForStoreExclusiveLock(t *testing.T) {
 	}
 	addDone := make(chan error, 1)
 	go func() {
-		_, err := New(opts).Add(context.Background(), "cli", "100.66.1.1", "", false)
+		_, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false)
 		addDone <- err
 	}()
 	<-locked
@@ -87,7 +87,7 @@ func TestReadPrefixesWaitsForStoreExclusiveLock(t *testing.T) {
 }
 
 func TestLockSharedDoesNotCreateMissingLockFile(t *testing.T) {
-	lockFile := filepath.Join(t.TempDir(), "corp-ips.lock")
+	lockFile := filepath.Join(t.TempDir(), "gateway-ips.lock")
 	release, err := LockShared(lockFile)
 	if err != nil {
 		t.Fatalf("LockShared() error = %v", err)

@@ -15,10 +15,10 @@ func TestLoadAppliesDefaultsAndNormalizesDomains(t *testing.T) {
 	t.Parallel()
 
 	path := writeFile(t, "twarp.yaml", 0o600, `
-corp:
-  socks: 192.168.0.105:8080
-  domains: [.X5.RU, ПРИМЕР.РФ]
-  dns: 100.64.70.28
+gateway:
+  socks: 192.168.1.10:1080
+  domains: [.INTRA.EXAMPLE, ПРИМЕР.РФ]
+  dns: 100.64.0.53
 `)
 
 	got, err := config.Load(path)
@@ -42,11 +42,11 @@ corp:
 	if got.LogLevel != "warn" {
 		t.Errorf("LogLevel = %q, want warn", got.LogLevel)
 	}
-	if !reflect.DeepEqual(got.Corp.AllowedRanges, wantRanges) {
-		t.Errorf("Corp.AllowedRanges = %#v, want %#v", got.Corp.AllowedRanges, wantRanges)
+	if !reflect.DeepEqual(got.Gateway.AllowedRanges, wantRanges) {
+		t.Errorf("Gateway.AllowedRanges = %#v, want %#v", got.Gateway.AllowedRanges, wantRanges)
 	}
-	if !reflect.DeepEqual(got.Corp.Domains, []string{"x5.ru", "xn--e1afmkfd.xn--p1ai"}) {
-		t.Errorf("Corp.Domains = %#v, want normalized ASCII domains", got.Corp.Domains)
+	if !reflect.DeepEqual(got.Gateway.Domains, []string{"intra.example", "xn--e1afmkfd.xn--p1ai"}) {
+		t.Errorf("Gateway.Domains = %#v, want normalized ASCII domains", got.Gateway.Domains)
 	}
 }
 
@@ -54,9 +54,9 @@ func TestLoadReadsExplicitValuesAndCanonicalizesPrefixes(t *testing.T) {
 	t.Parallel()
 
 	path := writeFile(t, "twarp.yaml", 0o600, `
-corp:
+gateway:
   socks: proxy.example.com:1080
-  domains: [Corp.Example]
+  domains: [Gateway.Example]
   dns: 2001:db8::53
   allowed_ranges: [10.7.9.4/8, 2001:db8:1::1/32]
 direct:
@@ -77,8 +77,8 @@ log_level: debug
 		netip.MustParsePrefix("10.0.0.0/8"),
 		netip.MustParsePrefix("2001:db8::/32"),
 	}
-	if !reflect.DeepEqual(got.Corp.AllowedRanges, wantRanges) {
-		t.Errorf("Corp.AllowedRanges = %#v, want %#v", got.Corp.AllowedRanges, wantRanges)
+	if !reflect.DeepEqual(got.Gateway.AllowedRanges, wantRanges) {
+		t.Errorf("Gateway.AllowedRanges = %#v, want %#v", got.Gateway.AllowedRanges, wantRanges)
 	}
 	if !reflect.DeepEqual(got.Direct.LocalDomains, []string{"lan"}) {
 		t.Errorf("Direct.LocalDomains = %#v, want [lan]", got.Direct.LocalDomains)
@@ -97,14 +97,14 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 		wantError string
 	}{
 		{name: "unknown field", yaml: validConfig() + "unknown: true\n", wantError: "field unknown not found"},
-		{name: "empty domains", yaml: strings.Replace(validConfig(), "domains: [x5.ru]", "domains: []", 1), wantError: "corp.domains is required"},
-		{name: "missing socks", yaml: strings.Replace(validConfig(), "  socks: 192.168.0.105:8080\n", "", 1), wantError: "corp.socks is required"},
-		{name: "socks without port", yaml: strings.Replace(validConfig(), "192.168.0.105:8080", "192.168.0.105", 1), wantError: "corp.socks must be host:port"},
-		{name: "socks invalid port", yaml: strings.Replace(validConfig(), "192.168.0.105:8080", "192.168.0.105:70000", 1), wantError: "corp.socks must be host:port"},
-		{name: "missing DNS", yaml: strings.Replace(validConfig(), "  dns: 100.64.70.28\n", "", 1), wantError: "corp.dns is required"},
-		{name: "non-IP DNS", yaml: strings.Replace(validConfig(), "100.64.70.28", "dns.example", 1), wantError: "corp.dns must be an IP address"},
-		{name: "invalid domain", yaml: strings.Replace(validConfig(), "x5.ru", "-bad.example", 1), wantError: "corp.domains"},
-		{name: "invalid prefix", yaml: validConfig() + "  allowed_ranges: [not-a-prefix]\n", wantError: "corp.allowed_ranges"},
+		{name: "empty domains", yaml: strings.Replace(validConfig(), "domains: [intra.example]", "domains: []", 1), wantError: "gateway.domains is required"},
+		{name: "missing socks", yaml: strings.Replace(validConfig(), "  socks: 192.168.1.10:1080\n", "", 1), wantError: "gateway.socks is required"},
+		{name: "socks without port", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1.10", 1), wantError: "gateway.socks must be host:port"},
+		{name: "socks invalid port", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1.10:70000", 1), wantError: "gateway.socks must be host:port"},
+		{name: "missing DNS", yaml: strings.Replace(validConfig(), "  dns: 100.64.0.53\n", "", 1), wantError: "gateway.dns is required"},
+		{name: "non-IP DNS", yaml: strings.Replace(validConfig(), "100.64.0.53", "dns.example", 1), wantError: "gateway.dns must be an IP address"},
+		{name: "invalid domain", yaml: strings.Replace(validConfig(), "intra.example", "-bad.example", 1), wantError: "gateway.domains"},
+		{name: "invalid prefix", yaml: validConfig() + "  allowed_ranges: [not-a-prefix]\n", wantError: "gateway.allowed_ranges"},
 		{name: "prefix wider than slash eight", yaml: validConfig() + "  allowed_ranges: [0.0.0.0/0]\n", wantError: "must not be wider than /8"},
 		{name: "invalid log level", yaml: validConfig() + "log_level: verbose\n", wantError: "log_level must be one of"},
 		{name: "non-IP direct DNS", yaml: validConfig() + "direct:\n  dns: dns.yandex\n", wantError: "direct.dns must be an IP address"},
@@ -170,10 +170,10 @@ func TestSecretsRejectLoosePermissionsAndRoundTripAt0600(t *testing.T) {
 }
 
 func validConfig() string {
-	return "corp:\n" +
-		"  socks: 192.168.0.105:8080\n" +
-		"  domains: [x5.ru]\n" +
-		"  dns: 100.64.70.28\n"
+	return "gateway:\n" +
+		"  socks: 192.168.1.10:1080\n" +
+		"  domains: [intra.example]\n" +
+		"  dns: 100.64.0.53\n"
 }
 
 func writeFile(t *testing.T, name string, mode os.FileMode, contents string) string {

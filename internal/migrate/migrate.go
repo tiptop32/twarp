@@ -51,7 +51,7 @@ var standardRanges = []netip.Prefix{
 	netip.MustParsePrefix("192.168.0.0/16"),
 }
 
-// Run migrates one legacy warp file into twarp.yaml and corp-ips.json.
+// Run migrates one legacy warp file into twarp.yaml and gateway-ips.json.
 func Run(opts Options) (Report, error) {
 	system := opts.Sys
 	if system == nil {
@@ -78,7 +78,7 @@ func Run(opts Options) (Report, error) {
 		return Report{}, errors.New("socks5 protocol has no DNS servers")
 	}
 
-	corpSocks, err := socksAddress(socks.Host)
+	gatewaySocks, err := socksAddress(socks.Host)
 	if err != nil {
 		return Report{}, err
 	}
@@ -94,7 +94,7 @@ func Run(opts Options) (Report, error) {
 	localDomains, domainWarnings := localDomains(legacy.ExcludeDomains)
 
 	configPath := opts.Paths.ConfigFile()
-	statePath := opts.Paths.CorpIPsFile()
+	statePath := opts.Paths.GatewayIPsFile()
 	if !opts.Force {
 		for _, path := range []string{configPath, statePath} {
 			if _, err := os.Stat(path); err == nil {
@@ -133,7 +133,7 @@ func Run(opts Options) (Report, error) {
 		LockFile:      opts.Paths.LockFile(),
 		AuditFile:     opts.Paths.AuditFile(),
 		AllowedRanges: allowedRanges,
-		CorpSocks:     corpSocks,
+		GatewaySocks:  gatewaySocks,
 	})
 	for _, input := range socks.IPs {
 		result, err := store.Add(context.Background(), "migrate", input, "migrated from warp", false)
@@ -215,7 +215,7 @@ func minimalAllowedRanges(prefixes []netip.Prefix) ([]netip.Prefix, []string) {
 		}
 		if !covered && !containsPrefixIn(ranges, prefix) {
 			ranges = append(ranges, prefix)
-			warnings = append(warnings, fmt.Sprintf("public range %s added to corp.allowed_ranges", prefix))
+			warnings = append(warnings, fmt.Sprintf("public range %s added to gateway.allowed_ranges", prefix))
 		}
 	}
 	return ranges, warnings
@@ -256,7 +256,7 @@ func localDomains(domains []string) ([]string, []string) {
 
 func renderConfig(socks legacySOCKS, allowedRanges []netip.Prefix, localDomains []string) string {
 	var output strings.Builder
-	output.WriteString("corp:\n  socks: ")
+	output.WriteString("gateway:\n  socks: ")
 	output.WriteString(strconv.Quote(socks.Host))
 	output.WriteString("\n  domains:\n")
 	for _, domain := range socks.Domains {
@@ -268,7 +268,7 @@ func renderConfig(socks legacySOCKS, allowedRanges []netip.Prefix, localDomains 
 	output.WriteString(strconv.Quote(socks.DNS[0]))
 	output.WriteByte('\n')
 	for _, fallback := range socks.DNS[1:] {
-		output.WriteString("  # fallback corp DNS (manual): ")
+		output.WriteString("  # fallback gateway DNS (manual): ")
 		output.WriteString(fallback)
 		output.WriteByte('\n')
 	}

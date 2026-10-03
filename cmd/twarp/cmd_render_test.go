@@ -54,8 +54,8 @@ func TestRunRenderOutWritesFullCheckableSet(t *testing.T) {
 			t.Errorf("full config does not contain credential %q", secret)
 		}
 	}
-	if !strings.Contains(string(data), filepath.Join(destination, "rules", "corp-ip.json")) {
-		t.Errorf("config does not point at rendered corp rule-set: %s", data)
+	if !strings.Contains(string(data), filepath.Join(destination, "rules", "gateway-ip.json")) {
+		t.Errorf("config does not point at rendered gateway rule-set: %s", data)
 	}
 	if !strings.Contains(string(data), filepath.Join(fixture.out, "geo", "geoip-ru.srs")) {
 		t.Errorf("config does not retain installed geo path: %s", data)
@@ -63,7 +63,7 @@ func TestRunRenderOutWritesFullCheckableSet(t *testing.T) {
 	if info, err := os.Stat(configPath); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("config mode = %v, error = %v, want 0600", info.Mode().Perm(), err)
 	}
-	if info, err := os.Stat(filepath.Join(destination, "rules", "corp-ip.json")); err != nil || info.Mode().Perm() != 0o644 {
+	if info, err := os.Stat(filepath.Join(destination, "rules", "gateway-ip.json")); err != nil || info.Mode().Perm() != 0o644 {
 		t.Fatalf("rule-set mode = %v, error = %v, want 0644", info.Mode().Perm(), err)
 	}
 }
@@ -91,7 +91,7 @@ func newCLIRenderFixture(t *testing.T, euid int) cliRenderFixture {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	configText := "corp:\n  socks: 192.168.0.105:8080\n  domains: [x5.ru]\n  dns: 100.64.70.28\n  allowed_ranges: [100.64.0.0/10]\n"
+	configText := "gateway:\n  socks: 192.168.1.10:1080\n  domains: [intra.example]\n  dns: 100.64.0.53\n  allowed_ranges: [100.64.0.0/10]\n"
 	if err := os.WriteFile(filepath.Join(home, "twarp.yaml"), []byte(configText), 0o600); err != nil {
 		t.Fatal(err)
 	}

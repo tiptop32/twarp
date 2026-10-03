@@ -1,4 +1,4 @@
-// Package state manages the persistent list of corporate network prefixes.
+// Package state manages the persistent list of gateway network prefixes.
 package state
 
 import (
@@ -35,7 +35,7 @@ const (
 	RemoveStatusNotFound RemoveStatus = "not_found"
 )
 
-// Entry is one persisted corporate network prefix and its provenance.
+// Entry is one persisted gateway network prefix and its provenance.
 type Entry struct {
 	CIDR    netip.Prefix `json:"cidr"`
 	Comment string       `json:"comment"`
@@ -66,7 +66,7 @@ type Options struct {
 	LockFile      string
 	AuditFile     string
 	AllowedRanges []netip.Prefix
-	CorpSocks     netip.Addr
+	GatewaySocks  netip.Addr
 	// OnChange runs after the state is atomically replaced. If it fails, Add or
 	// Remove returns its error, but the new state remains persisted.
 	OnChange   func([]netip.Prefix) error
@@ -75,7 +75,7 @@ type Options struct {
 	MaxEntries int
 }
 
-// Store provides serialized access to the persistent corporate prefix list.
+// Store provides serialized access to the persistent gateway prefix list.
 type Store struct {
 	opts Options
 }
@@ -96,7 +96,7 @@ func New(opts Options) *Store {
 func (s *Store) Add(ctx context.Context, actor, input, comment string, force bool) (AddResult, error) {
 	prefix, warnings, err := Normalize(input)
 	if err == nil {
-		err = validatePrefix(prefix, s.opts.AllowedRanges, s.opts.CorpSocks, force)
+		err = validatePrefix(prefix, s.opts.AllowedRanges, s.opts.GatewaySocks, force)
 	}
 	if err != nil {
 		// Refused attempts are the most useful trace of what an agent tried to do.
@@ -130,7 +130,7 @@ func (s *Store) Add(ctx context.Context, actor, input, comment string, force boo
 		}
 	}
 	if len(state.CIDRs) >= s.opts.MaxEntries {
-		return AddResult{}, fmt.Errorf("corporate CIDR limit reached: maximum %d entries", s.opts.MaxEntries)
+		return AddResult{}, fmt.Errorf("gateway CIDR limit reached: maximum %d entries", s.opts.MaxEntries)
 	}
 
 	result.Status = AddStatusAdded
@@ -211,12 +211,12 @@ type diskState struct {
 }
 
 func (s *Store) read() (diskState, error) {
-	return readStateFile(s.opts.File, s.opts.CorpSocks)
+	return readStateFile(s.opts.File, s.opts.GatewaySocks)
 }
 
 func (s *Store) write(state diskState) error {
 	dir := filepath.Dir(s.opts.File)
-	temporary, err := os.CreateTemp(dir, ".corp-ips-*.tmp")
+	temporary, err := os.CreateTemp(dir, ".gateway-ips-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temporary state for %q: %w", s.opts.File, err)
 	}

@@ -1,4 +1,4 @@
-// Command twarp manages an external sing-box and splits traffic into corp, direct and vpn flows.
+// Command twarp manages an external sing-box and splits traffic into gateway, direct and vpn flows.
 package main
 
 import (
@@ -28,7 +28,7 @@ var commands = []command{
 	{"apply", "render, check and hot-reload sing-box"},
 	{"install", "install the sing-box launchd daemon"},
 	{"uninstall", "remove the sing-box launchd daemon"},
-	{"corp-ip", "manage the corp CIDR list"},
+	{"gateway", "manage gateway CIDRs"},
 	{"geo", "update geoip/geosite rule-sets"},
 	{"status", "show daemon and routing status"},
 	{"mcp", "run the MCP server on stdio"},
@@ -88,8 +88,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runInstall(args[1:], stdout, stderr, deps)
 	case "uninstall":
 		return runUninstall(args[1:], stdout, stderr, deps)
-	case "corp-ip":
-		return runCorpIP(args[1:], stdout, stderr, deps)
+	case "gateway":
+		return runGateway(args[1:], stdout, stderr, deps)
 	case "geo":
 		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: deps.Sys})
 	}

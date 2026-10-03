@@ -74,7 +74,7 @@ func TestInstallPerformsSystemSetupInOrder(t *testing.T) {
 		{kind: "render"},
 		{kind: "write", path: paths.OutConfig(), data: "generated config\n", mode: 0o600},
 		{kind: "write-rule-set", path: paths.RulesDir()},
-		{kind: "chown", path: filepath.Join(paths.RulesDir(), "corp-ip.json"), uid: 501, gid: 20},
+		{kind: "chown", path: filepath.Join(paths.RulesDir(), "gateway-ip.json"), uid: 501, gid: 20},
 		{kind: "write", path: launchd.SingBoxPlistPath, data: string(fixture(t, "dev.twarp.singbox.plist")), mode: 0o644},
 		{kind: "write", path: launchd.GeoPlistPath, data: string(fixture(t, "dev.twarp.geo.plist")), mode: 0o644},
 		{kind: "write", path: launchd.NewsyslogPath, data: string(fixture(t, "twarp.newsyslog.conf")), mode: 0o644},

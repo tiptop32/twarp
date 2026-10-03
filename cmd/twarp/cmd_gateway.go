@@ -17,39 +17,39 @@ import (
 	"github.com/tiptop32/twarp/internal/state"
 )
 
-func runCorpIP(args []string, stdout, stderr io.Writer, deps cliDeps) int {
+func runGateway(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if deps.Sys.Geteuid() == 0 {
-		_, _ = fmt.Fprintln(stderr, "twarp corp-ip: do not run corp-ip with sudo")
+		_, _ = fmt.Fprintln(stderr, "twarp gateway: do not run gateway with sudo")
 		return 1
 	}
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "Usage: twarp corp-ip add|rm|ls")
+		_, _ = fmt.Fprintln(stderr, "Usage: twarp gateway add|rm|ls")
 		return 2
 	}
 
-	store, rulesDir, err := newCorpIPStore(deps)
+	store, rulesDir, err := newGatewayStore(deps)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "twarp corp-ip: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "twarp gateway: %v\n", err)
 		return 1
 	}
 	switch args[0] {
 	case "add":
-		code := runCorpIPAdd(store, args[1:], stdout, stderr)
+		code := runGatewayAdd(store, args[1:], stdout, stderr)
 		warnNotInstalled(stderr, rulesDir, code)
 		return code
 	case "rm":
-		code := runCorpIPRemove(store, args[1:], stdout, stderr)
+		code := runGatewayRemove(store, args[1:], stdout, stderr)
 		warnNotInstalled(stderr, rulesDir, code)
 		return code
 	case "ls":
-		return runCorpIPList(store, args[1:], stdout, stderr)
+		return runGatewayList(store, args[1:], stdout, stderr)
 	default:
-		_, _ = fmt.Fprintf(stderr, "twarp corp-ip: unknown command %q\n", args[0])
+		_, _ = fmt.Fprintf(stderr, "twarp gateway: unknown command %q\n", args[0])
 		return 2
 	}
 }
 
-func newCorpIPStore(deps cliDeps) (*state.Store, string, error) {
+func newGatewayStore(deps cliDeps) (*state.Store, string, error) {
 	paths, err := config.Resolve(deps.Sys)
 	if err != nil {
 		return nil, "", err
@@ -58,13 +58,13 @@ func newCorpIPStore(deps cliDeps) (*state.Store, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	host, _, err := net.SplitHostPort(cfg.Corp.Socks)
+	host, _, err := net.SplitHostPort(cfg.Gateway.Socks)
 	if err != nil {
-		return nil, "", fmt.Errorf("parse corp.socks: %w", err)
+		return nil, "", fmt.Errorf("parse gateway.socks: %w", err)
 	}
-	corpSocks, err := netip.ParseAddr(host)
+	gatewaySocks, err := netip.ParseAddr(host)
 	if err != nil {
-		return nil, "", fmt.Errorf("corp.socks host must be an IP address: %w", err)
+		return nil, "", fmt.Errorf("gateway.socks host must be an IP address: %w", err)
 	}
 
 	var running func() bool
@@ -77,25 +77,25 @@ func newCorpIPStore(deps cliDeps) (*state.Store, string, error) {
 		return nil, "", err
 	}
 	return state.New(state.Options{
-		File:          paths.CorpIPsFile(),
+		File:          paths.GatewayIPsFile(),
 		LockFile:      paths.LockFile(),
 		AuditFile:     paths.AuditFile(),
-		AllowedRanges: cfg.Corp.AllowedRanges,
-		CorpSocks:     corpSocks,
+		AllowedRanges: cfg.Gateway.AllowedRanges,
+		GatewaySocks:  gatewaySocks,
 		OnChange:      render.OnChangeWriter(paths.RulesDir()),
 		Running:       running,
 	}), paths.RulesDir(), nil
 }
 
-func runCorpIPAdd(store *state.Store, args []string, stdout, stderr io.Writer) int {
-	input, comment, force, err := parseCorpIPAddArgs(args)
+func runGatewayAdd(store *state.Store, args []string, stdout, stderr io.Writer) int {
+	input, comment, force, err := parseGatewayAddArgs(args)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "twarp corp-ip add: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "twarp gateway add: %v\n", err)
 		return 2
 	}
 	result, err := store.Add(context.Background(), "cli", input, comment, force)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "twarp corp-ip add: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "twarp gateway add: %v\n", err)
 		return 1
 	}
 	switch result.Status {
@@ -110,7 +110,7 @@ func runCorpIPAdd(store *state.Store, args []string, stdout, stderr io.Writer) i
 	return 0
 }
 
-func parseCorpIPAddArgs(args []string) (input, comment string, force bool, err error) {
+func parseGatewayAddArgs(args []string) (input, comment string, force bool, err error) {
 	positionals := make([]string, 0, 1)
 	for index := 0; index < len(args); index++ {
 		switch arg := args[index]; {
@@ -131,19 +131,19 @@ func parseCorpIPAddArgs(args []string) (input, comment string, force bool, err e
 		}
 	}
 	if len(positionals) != 1 {
-		return "", "", false, errors.New("usage: twarp corp-ip add <cidr> [--comment text] [--force]")
+		return "", "", false, errors.New("usage: twarp gateway add <cidr> [--comment text] [--force]")
 	}
 	return positionals[0], comment, force, nil
 }
 
-func runCorpIPRemove(store *state.Store, args []string, stdout, stderr io.Writer) int {
+func runGatewayRemove(store *state.Store, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		_, _ = fmt.Fprintln(stderr, "twarp corp-ip rm: usage: twarp corp-ip rm <cidr>")
+		_, _ = fmt.Fprintln(stderr, "twarp gateway rm: usage: twarp gateway rm <cidr>")
 		return 2
 	}
 	result, err := store.Remove(context.Background(), "cli", args[0])
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "twarp corp-ip rm: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "twarp gateway rm: %v\n", err)
 		return 1
 	}
 	if result.Status == state.RemoveStatusRemoved {
@@ -155,18 +155,18 @@ func runCorpIPRemove(store *state.Store, args []string, stdout, stderr io.Writer
 	return 0
 }
 
-func runCorpIPList(store *state.Store, args []string, stdout, stderr io.Writer) int {
+func runGatewayList(store *state.Store, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
-		_, _ = fmt.Fprintln(stderr, "twarp corp-ip ls: usage: twarp corp-ip ls")
+		_, _ = fmt.Fprintln(stderr, "twarp gateway ls: usage: twarp gateway ls")
 		return 2
 	}
 	entries, err := store.List()
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "twarp corp-ip ls: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "twarp gateway ls: %v\n", err)
 		return 1
 	}
 	if len(entries) == 0 {
-		_, _ = fmt.Fprintln(stdout, "no corp CIDRs")
+		_, _ = fmt.Fprintln(stdout, "no gateway CIDRs")
 		return 0
 	}
 	table := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
@@ -175,7 +175,7 @@ func runCorpIPList(store *state.Store, args []string, stdout, stderr io.Writer) 
 		_, _ = fmt.Fprintf(table, "%s\t%s\t%s\t%s\n", entry.CIDR, entry.AddedBy, entry.AddedAt.UTC().Format(time.RFC3339), entry.Comment)
 	}
 	if err := table.Flush(); err != nil {
-		_, _ = fmt.Fprintf(stderr, "twarp corp-ip ls: write output: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "twarp gateway ls: write output: %v\n", err)
 		return 1
 	}
 	return 0
@@ -190,6 +190,6 @@ func printWarnings(stderr io.Writer, warnings []string) {
 // warnNotInstalled explains why a successful change did not reach sing-box yet.
 func warnNotInstalled(stderr io.Writer, rulesDir string, code int) {
 	if code == 0 && !render.Installed(rulesDir) {
-		_, _ = fmt.Fprintln(stderr, "warning: twarp is not installed yet: saved to corp-ips.json; sudo twarp install will write the rule-set")
+		_, _ = fmt.Fprintln(stderr, "warning: twarp is not installed yet: saved to gateway-ips.json; sudo twarp install will write the rule-set")
 	}
 }

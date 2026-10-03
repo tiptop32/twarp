@@ -52,7 +52,7 @@ func runApply(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return failApply(stderr, deps.Sys, err)
 	}
 	// Hold LOCK_SH from reading the state until the rule-set is written: a
-	// concurrent corp-ip add (CLI or MCP) waits instead of being overwritten.
+	// concurrent gateway add (CLI or MCP) waits instead of being overwritten.
 	release, err := state.LockShared(resolved.LockFile())
 	if err != nil {
 		return failApply(stderr, deps.Sys, err)
@@ -99,9 +99,9 @@ func writeApplyFiles(deps cliDeps, paths config.Paths, prefixes []netip.Prefix, 
 	if err := render.WriteRuleSet(paths.RulesDir(), prefixes); err != nil {
 		return err
 	}
-	ruleSet := filepath.Join(paths.RulesDir(), "corp-ip.json")
+	ruleSet := filepath.Join(paths.RulesDir(), "gateway-ip.json")
 	if err := deps.FS.Chown(ruleSet, uid, gid); err != nil {
-		return fmt.Errorf("give corporate rule-set to sudo user: %w", err)
+		return fmt.Errorf("give gateway rule-set to sudo user: %w", err)
 	}
 	return nil
 }

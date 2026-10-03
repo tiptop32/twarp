@@ -28,11 +28,11 @@ func (paths Paths) ConfigFile() string { return filepath.Join(paths.Home, "twarp
 // SecretsFile returns the secrets.yaml path.
 func (paths Paths) SecretsFile() string { return filepath.Join(paths.Home, "secrets.yaml") }
 
-// CorpIPsFile returns the persistent corporate IP list path.
-func (paths Paths) CorpIPsFile() string { return filepath.Join(paths.Home, "corp-ips.json") }
+// GatewayIPsFile returns the persistent gateway IP list path.
+func (paths Paths) GatewayIPsFile() string { return filepath.Join(paths.Home, "gateway-ips.json") }
 
-// LockFile returns the corporate IP list lock path.
-func (paths Paths) LockFile() string { return filepath.Join(paths.Home, "corp-ips.lock") }
+// LockFile returns the gateway IP list lock path.
+func (paths Paths) LockFile() string { return filepath.Join(paths.Home, "gateway-ips.lock") }
 
 // AuditFile returns the user audit log path.
 func (paths Paths) AuditFile() string { return filepath.Join(paths.Home, "audit.jsonl") }

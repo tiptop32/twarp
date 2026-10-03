@@ -150,11 +150,11 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 		return fmt.Errorf("write sing-box config: %w", err)
 	}
 	if err := options.WriteRuleSet(options.Paths.RulesDir()); err != nil {
-		return fmt.Errorf("write corporate rule-set: %w", err)
+		return fmt.Errorf("write gateway rule-set: %w", err)
 	}
-	corpRuleSet := filepath.Join(options.Paths.RulesDir(), "corp-ip.json")
-	if err := deps.FS.Chown(corpRuleSet, uid, gid); err != nil {
-		return fmt.Errorf("give corporate rule-set to sudo user: %w", err)
+	gatewayRuleSet := filepath.Join(options.Paths.RulesDir(), "gateway-ip.json")
+	if err := deps.FS.Chown(gatewayRuleSet, uid, gid); err != nil {
+		return fmt.Errorf("give gateway rule-set to sudo user: %w", err)
 	}
 	if err := singbox.Check(ctx, deps.Runner, options.Paths.SingBox, options.Paths.OutConfig()); err != nil {
 		return err

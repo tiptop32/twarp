@@ -45,7 +45,7 @@ func TestRunApplyChecksAndReloadsRunningService(t *testing.T) {
 	if err := runner.Verify(); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := filesystem.chowns, []cliChown{{filepath.Join(fixture.out, "rules", "corp-ip.json"), 501, 20}}; !reflect.DeepEqual(got, want) {
+	if got, want := filesystem.chowns, []cliChown{{filepath.Join(fixture.out, "rules", "gateway-ip.json"), 501, 20}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("chowns = %#v, want %#v", got, want)
 	}
 	if info, err := os.Stat(filepath.Join(fixture.out, "config.json")); err != nil || info.Mode().Perm() != 0o600 {
@@ -122,14 +122,14 @@ func TestRunApplyWaitsForStoreExclusiveLock(t *testing.T) {
 	locked := make(chan struct{})
 	release := make(chan struct{})
 	store := state.New(state.Options{
-		File: filepath.Join(fixture.home, "corp-ips.json"), LockFile: filepath.Join(fixture.home, "corp-ips.lock"),
+		File: filepath.Join(fixture.home, "gateway-ips.json"), LockFile: filepath.Join(fixture.home, "gateway-ips.lock"),
 		AuditFile: filepath.Join(fixture.home, "audit.jsonl"), AllowedRanges: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")},
-		CorpSocks: netip.MustParseAddr("192.168.0.105"),
-		OnChange:  func([]netip.Prefix) error { close(locked); <-release; return nil },
+		GatewaySocks: netip.MustParseAddr("192.168.1.10"),
+		OnChange:     func([]netip.Prefix) error { close(locked); <-release; return nil },
 	})
 	addDone := make(chan error, 1)
 	go func() {
-		_, err := store.Add(context.Background(), "cli", "100.66.1.1", "", false)
+		_, err := store.Add(context.Background(), "cli", "100.64.11.1", "", false)
 		addDone <- err
 	}()
 	<-locked
@@ -237,7 +237,7 @@ var _ config.Sys = cliTestSys{}
 // MCP add between read and write is overwritten by the stale list.
 func TestRunApplyHoldsLockWhileWritingRuleSet(t *testing.T) {
 	fixture := newCLIRenderFixture(t, 0)
-	lockPath := filepath.Join(fixture.home, "corp-ips.lock")
+	lockPath := filepath.Join(fixture.home, "gateway-ips.lock")
 	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

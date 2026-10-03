@@ -50,11 +50,11 @@ func TestClashConnections(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{
   "connections": [{
-    "chains": ["corp", "mixed-in"],
+    "chains": ["gateway", "mixed-in"],
     "metadata": {
-      "destinationIP": "100.66.90.10",
+      "destinationIP": "100.64.10.10",
       "destinationPort": "443",
-      "host": "service.corp.example"
+      "host": "service.gateway.example"
     }
   }]
 }`))
@@ -67,16 +67,16 @@ func TestClashConnections(t *testing.T) {
 		t.Fatalf("Connections() error = %v", err)
 	}
 	want := []singbox.Connection{{
-		Chains:          []string{"corp", "mixed-in"},
-		DestinationIP:   "100.66.90.10",
+		Chains:          []string{"gateway", "mixed-in"},
+		DestinationIP:   "100.64.10.10",
 		DestinationPort: "443",
-		Host:            "service.corp.example",
+		Host:            "service.gateway.example",
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Connections() = %#v, want %#v", got, want)
 	}
-	if got[0].Outbound() != "corp" {
-		t.Fatalf("Outbound() = %q, want %q", got[0].Outbound(), "corp")
+	if got[0].Outbound() != "gateway" {
+		t.Fatalf("Outbound() = %q, want %q", got[0].Outbound(), "gateway")
 	}
 	if got := (singbox.Connection{}).Outbound(); got != "" {
 		t.Fatalf("empty Outbound() = %q, want empty string", got)

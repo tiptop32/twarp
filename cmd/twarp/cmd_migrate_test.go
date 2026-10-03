@@ -31,7 +31,7 @@ func TestRunMigrateUsesHomeAndForce(t *testing.T) {
 	if err := os.WriteFile(paths.ConfigFile(), []byte("old config\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(paths.CorpIPsFile(), []byte("old state\n"), 0o600); err != nil {
+	if err := os.WriteFile(paths.GatewayIPsFile(), []byte("old state\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", userHome)
@@ -46,9 +46,9 @@ func TestRunMigrateUsesHomeAndForce(t *testing.T) {
 	}
 	for _, want := range []string{
 		paths.ConfigFile(),
-		paths.CorpIPsFile(),
+		paths.GatewayIPsFile(),
 		"8 CIDRs",
-		"warning: host bits masked: 100.66.65.149/24 → 100.66.65.0/24",
+		"warning: host bits masked: 100.64.11.149/24 → 100.64.11.0/24",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("stdout = %q, want it to contain %q", stdout.String(), want)
@@ -57,7 +57,7 @@ func TestRunMigrateUsesHomeAndForce(t *testing.T) {
 	if _, err := config.Load(paths.ConfigFile()); err != nil {
 		t.Fatalf("Load(migrated config) error = %v", err)
 	}
-	stateText, err := os.ReadFile(paths.CorpIPsFile())
+	stateText, err := os.ReadFile(paths.GatewayIPsFile())
 	if err != nil {
 		t.Fatal(err)
 	}

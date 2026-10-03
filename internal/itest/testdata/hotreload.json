@@ -18,7 +18,7 @@
     },
     {
       "type": "socks",
-      "tag": "corp",
+      "tag": "gateway",
       "server": "127.0.0.1",
       "server_port": {{SOCKS_PORT}}
     }
@@ -26,14 +26,14 @@
   "route": {
     "rules": [
       {
-        "rule_set": "corp-ip",
-        "outbound": "corp"
+        "rule_set": "gateway-ip",
+        "outbound": "gateway"
       }
     ],
     "rule_set": [
       {
         "type": "local",
-        "tag": "corp-ip",
+        "tag": "gateway-ip",
         "format": "source",
         "path": "{{RULE_SET_PATH}}"
       }

@@ -33,13 +33,13 @@ func RenderRuleSet(prefixes []netip.Prefix) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// WriteRuleSet atomically replaces rules/corp-ip.json with world-readable data.
+// WriteRuleSet atomically replaces rules/gateway-ip.json with world-readable data.
 func WriteRuleSet(dir string, prefixes []netip.Prefix) error {
 	data, err := RenderRuleSet(prefixes)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "corp-ip.json")
+	path := filepath.Join(dir, "gateway-ip.json")
 	if err := writeAtomic(path, data, 0o644); err != nil {
 		return fmt.Errorf("write rule-set %q: %w", path, err)
 	}

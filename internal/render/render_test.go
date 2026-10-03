@@ -59,8 +59,8 @@ func TestRenderConfigContract(t *testing.T) {
 		{Action: "sniff"},
 		{Protocol: "dns", Action: "hijack-dns"},
 		{IPCIDR: []string{"192.0.2.10/32"}, Outbound: "direct"},
-		{DomainSuffix: []string{"corp.example", "internal.example"}, Outbound: "corp"},
-		{RuleSet: []string{"corp-ip"}, Outbound: "corp"},
+		{DomainSuffix: []string{"gateway.example", "internal.example"}, Outbound: "gateway"},
+		{RuleSet: []string{"gateway-ip"}, Outbound: "gateway"},
 		{IPIsPrivate: true, Outbound: "direct"},
 		{DomainSuffix: []string{"home.arpa", "lan"}, Outbound: "direct"},
 		{DomainSuffix: []string{"ru", "su", "xn--p1ai"}, Outbound: "direct"},
@@ -79,13 +79,13 @@ func TestRenderConfigContract(t *testing.T) {
 	}
 
 	wantDNSServers := []singbox.DNSServer{
-		{Type: "tcp", Tag: "corp", Server: "100.64.70.28", Detour: "corp"},
+		{Type: "tcp", Tag: "gateway", Server: "100.64.0.53", Detour: "gateway"},
 		{Type: "udp", Tag: "direct", Server: "77.88.8.8"},
 		{Type: "local", Tag: "local"},
 		{Type: "https", Tag: "remote", Server: "1.1.1.1", Path: "/custom-query", Detour: "vpn"},
 	}
 	wantDNSRules := []singbox.DNSRule{
-		{DomainSuffix: []string{"corp.example", "internal.example"}, Server: "corp"},
+		{DomainSuffix: []string{"gateway.example", "internal.example"}, Server: "gateway"},
 		{DomainSuffix: []string{"home.arpa", "lan"}, Server: "local"},
 		{DomainSuffix: []string{"ru", "su", "xn--p1ai"}, Server: "direct"},
 		{RuleSet: []string{"geosite-category-ru"}, Server: "direct"},
@@ -111,12 +111,12 @@ func TestRenderConfigContract(t *testing.T) {
 func TestRenderMixedInboundAndOutboundOverrides(t *testing.T) {
 	out := t.TempDir()
 	createGeoPlaceholders(t, out)
-	corpOverride := singbox.Outbound{Type: "direct", Tag: "corp"}
+	gatewayOverride := singbox.Outbound{Type: "direct", Tag: "gateway"}
 	vpnOverride := singbox.Outbound{Type: "direct", Tag: "vpn"}
 	got := renderFixture(t, out, render.Options{
 		Inbound:   render.InboundMixed,
 		MixedPort: 2080,
-		Outbounds: map[string]singbox.Outbound{"corp": corpOverride, "vpn": vpnOverride},
+		Outbounds: map[string]singbox.Outbound{"gateway": gatewayOverride, "vpn": vpnOverride},
 	})
 	var configJSON singbox.Config
 	if err := json.Unmarshal(got, &configJSON); err != nil {
@@ -126,8 +126,8 @@ func TestRenderMixedInboundAndOutboundOverrides(t *testing.T) {
 	if len(configJSON.Inbounds) != 1 || !reflect.DeepEqual(configJSON.Inbounds[0], wantInbound) {
 		t.Fatalf("inbounds = %#v, want %#v", configJSON.Inbounds, []singbox.Inbound{wantInbound})
 	}
-	if got := outboundByTag(t, configJSON.Outbounds, "corp"); !reflect.DeepEqual(got, corpOverride) {
-		t.Fatalf("corp outbound = %#v, want override %#v", got, corpOverride)
+	if got := outboundByTag(t, configJSON.Outbounds, "gateway"); !reflect.DeepEqual(got, gatewayOverride) {
+		t.Fatalf("gateway outbound = %#v, want override %#v", got, gatewayOverride)
 	}
 	if got := outboundByTag(t, configJSON.Outbounds, "vpn"); !reflect.DeepEqual(got, vpnOverride) {
 		t.Fatalf("vpn outbound = %#v, want override %#v", got, vpnOverride)
@@ -157,7 +157,7 @@ func TestRenderRuleSetMatchesGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderRuleSet() error = %v", err)
 	}
-	assertGolden(t, filepath.Join("testdata", "golden", "corp-ip.json"), got)
+	assertGolden(t, filepath.Join("testdata", "golden", "gateway-ip.json"), got)
 }
 
 func TestRenderRuleSetEmptyAndSingBoxCompile(t *testing.T) {
@@ -178,11 +178,11 @@ func TestRenderRuleSetEmptyAndSingBoxCompile(t *testing.T) {
 			if test.want != "" && string(got) != test.want {
 				t.Fatalf("RenderRuleSet() = %s, want %s", got, test.want)
 			}
-			source := filepath.Join(t.TempDir(), "corp-ip.json")
+			source := filepath.Join(t.TempDir(), "gateway-ip.json")
 			if err := os.WriteFile(source, got, 0o600); err != nil {
 				t.Fatalf("write source rule-set: %v", err)
 			}
-			output := filepath.Join(t.TempDir(), "corp-ip.srs")
+			output := filepath.Join(t.TempDir(), "gateway-ip.srs")
 			command := exec.Command(singBox(t), "rule-set", "compile", "--output", output, source)
 			if commandOutput, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("sing-box rule-set compile: %v\n%s", err, commandOutput)
@@ -226,7 +226,7 @@ func TestAtomicWritersModesAndOnChange(t *testing.T) {
 	if err := render.WriteRuleSet(rulesDir, nil); err != nil {
 		t.Fatalf("WriteRuleSet() error = %v", err)
 	}
-	rulesPath := filepath.Join(rulesDir, "corp-ip.json")
+	rulesPath := filepath.Join(rulesDir, "gateway-ip.json")
 	assertFile(t, rulesPath, "{\n  \"version\": 2,\n  \"rules\": []\n}\n", 0o644)
 	if err := render.OnChangeWriter(rulesDir)(testPrefixes()); err != nil {
 		t.Fatalf("OnChangeWriter() error = %v", err)
@@ -235,10 +235,10 @@ func TestAtomicWritersModesAndOnChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read callback rule-set: %v", err)
 	}
-	if !bytes.Contains(got, []byte("100.66.84.182/32")) {
+	if !bytes.Contains(got, []byte("100.64.10.182/32")) {
 		t.Fatalf("callback rule-set = %s, want updated prefixes", got)
 	}
-	matches, err := filepath.Glob(filepath.Join(rulesDir, ".corp-ip.json.tmp-*"))
+	matches, err := filepath.Glob(filepath.Join(rulesDir, ".gateway-ip.json.tmp-*"))
 	if err != nil {
 		t.Fatalf("glob temporary rule-set files: %v", err)
 	}
@@ -270,10 +270,10 @@ func outboundByTag(t *testing.T, outbounds []singbox.Outbound, tag string) singb
 
 func testConfig() config.Config {
 	return config.Config{
-		Corp: config.CorpConfig{
+		Gateway: config.GatewayConfig{
 			Socks:   "192.0.2.10:1080",
-			Domains: []string{"corp.example", "internal.example"},
-			DNS:     "100.64.70.28",
+			Domains: []string{"gateway.example", "internal.example"},
+			DNS:     "100.64.0.53",
 		},
 		Direct: config.DirectConfig{
 			DNS:          "77.88.8.8",
@@ -315,7 +315,7 @@ func testSecrets(t *testing.T) config.Secrets {
 
 func testPrefixes() []netip.Prefix {
 	return []netip.Prefix{
-		netip.MustParsePrefix("100.66.84.182/32"),
+		netip.MustParsePrefix("100.64.10.182/32"),
 		netip.MustParsePrefix("2001:db8:abcd::/48"),
 	}
 }

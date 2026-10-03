@@ -47,7 +47,7 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 	if err != nil {
 		return nil, err
 	}
-	host, port, socksPrefix, err := parseCorpSOCKS(cfg.Corp.Socks)
+	host, port, socksPrefix, err := parseGatewaySOCKS(cfg.Gateway.Socks)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 
 	outbounds := []singbox.Outbound{
 		{Type: "direct", Tag: "direct"},
-		{Type: "socks", Tag: "corp", Server: host, ServerPort: port, Version: "5"},
+		{Type: "socks", Tag: "gateway", Server: host, ServerPort: port, Version: "5"},
 		vpn,
 	}
 	for i := range outbounds {
@@ -81,13 +81,13 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 		Outbounds: outbounds,
 		DNS: singbox.DNS{
 			Servers: []singbox.DNSServer{
-				{Type: "tcp", Tag: "corp", Server: cfg.Corp.DNS, Detour: "corp"},
+				{Type: "tcp", Tag: "gateway", Server: cfg.Gateway.DNS, Detour: "gateway"},
 				{Type: "udp", Tag: "direct", Server: cfg.Direct.DNS},
 				{Type: "local", Tag: "local"},
 				{Type: "https", Tag: "remote", Server: remoteDNS.Hostname(), Path: remotePath, Detour: "vpn"},
 			},
 			Rules: []singbox.DNSRule{
-				{DomainSuffix: cfg.Corp.Domains, Server: "corp"},
+				{DomainSuffix: cfg.Gateway.Domains, Server: "gateway"},
 				{DomainSuffix: directSuffixes, Server: "direct"},
 				{RuleSet: []string{"geosite-category-ru"}, Server: "direct"},
 			},
@@ -100,14 +100,14 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 				{Action: "sniff"},
 				{Protocol: "dns", Action: "hijack-dns"},
 				{IPCIDR: []string{socksPrefix}, Outbound: "direct"},
-				{DomainSuffix: cfg.Corp.Domains, Outbound: "corp"},
-				{RuleSet: []string{"corp-ip"}, Outbound: "corp"},
+				{DomainSuffix: cfg.Gateway.Domains, Outbound: "gateway"},
+				{RuleSet: []string{"gateway-ip"}, Outbound: "gateway"},
 				{IPIsPrivate: true, Outbound: "direct"},
 				{DomainSuffix: directSuffixes, Outbound: "direct"},
 				{RuleSet: []string{"geoip-ru", "geosite-category-ru"}, Outbound: "direct"},
 			},
 			RuleSets: []singbox.RuleSet{
-				{Type: "local", Tag: "corp-ip", Format: "source", Path: filepath.Join(opts.Paths.RulesDir(), "corp-ip.json")},
+				{Type: "local", Tag: "gateway-ip", Format: "source", Path: filepath.Join(opts.Paths.RulesDir(), "gateway-ip.json")},
 				{Type: "local", Tag: "geoip-ru", Format: "binary", Path: filepath.Join(opts.Paths.GeoDir(), "geoip-ru.srs")},
 				{Type: "local", Tag: "geosite-category-ru", Format: "binary", Path: filepath.Join(opts.Paths.GeoDir(), "geosite-category-ru.srs")},
 			},
@@ -165,18 +165,18 @@ func renderInbound(opts Options) (singbox.Inbound, error) {
 	}
 }
 
-func parseCorpSOCKS(address string) (string, uint16, string, error) {
+func parseGatewaySOCKS(address string) (string, uint16, string, error) {
 	host, portText, err := net.SplitHostPort(address)
 	if err != nil {
-		return "", 0, "", fmt.Errorf("parse corporate SOCKS address: %w", err)
+		return "", 0, "", fmt.Errorf("parse gateway SOCKS address: %w", err)
 	}
 	port, err := strconv.ParseUint(portText, 10, 16)
 	if err != nil || port == 0 {
-		return "", 0, "", errors.New("parse corporate SOCKS address: invalid port")
+		return "", 0, "", errors.New("parse gateway SOCKS address: invalid port")
 	}
 	addressIP, err := netip.ParseAddr(host)
 	if err != nil {
-		return "", 0, "", errors.New("corporate SOCKS host must be an IP address")
+		return "", 0, "", errors.New("gateway SOCKS host must be an IP address")
 	}
 	addressIP = addressIP.Unmap()
 	bits := 128

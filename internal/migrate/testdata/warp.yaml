@@ -3,16 +3,16 @@ tunnel:
   ip: 192.255.255.1
 protocols:
   - socks5:
-      host: 192.168.0.105:8080
-      domains: [x5.ru, express.ms, ktalk.ru, ktalk.host, rutube.ru, lemanapro.ru]
-      dns: [100.64.70.28, 192.168.39.45]
+      host: 192.168.1.10:1080
+      domains: [intra.example, chat.example, meet.example, video.example, shop.example, docs.example]
+      dns: [100.64.0.53, 192.168.100.53]
       ips:
-        - 100.66.84.182/32
-        - 100.66.83.242/32
-        - 100.66.83.108/32
-        - 100.126.7.247/32
-        - 100.66.64.12/32
-        - 100.66.64.13/32
-        - 100.66.65.149/24
-        - 100.65.33.160/24
-exclude_domains: [e.mail.ru, home.arpa]
+        - 100.64.10.182/32
+        - 100.64.10.242/32
+        - 100.64.10.108/32
+        - 100.127.1.1/32
+        - 100.64.12.12/32
+        - 100.64.12.13/32
+        - 100.64.11.149/24
+        - 100.64.12.160/24
+exclude_domains: [mail.example.ru, home.arpa]

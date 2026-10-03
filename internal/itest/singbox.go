@@ -205,7 +205,7 @@ func startSingBox(t *testing.T, socksPort int, initialRuleSet []byte) *singBoxPr
 		t.Fatalf("sing-box 1.14 binary at %s: %v", singBoxPath, err)
 	}
 	directory := t.TempDir()
-	ruleSetPath := filepath.Join(directory, "corp-ip.json")
+	ruleSetPath := filepath.Join(directory, "gateway-ip.json")
 	if err := os.WriteFile(ruleSetPath, initialRuleSet, 0o600); err != nil {
 		t.Fatalf("write initial rule-set: %v", err)
 	}
@@ -442,7 +442,7 @@ func (b *singBoxProcess) replaceRuleSet(t *testing.T, contents []byte) {
 
 func (b *singBoxProcess) replaceRuleSetRaw(t *testing.T, contents []byte) {
 	t.Helper()
-	temporaryPath := filepath.Join(b.directory, ".corp-ip.json.tmp")
+	temporaryPath := filepath.Join(b.directory, ".gateway-ip.json.tmp")
 	if err := os.WriteFile(temporaryPath, contents, 0o600); err != nil {
 		t.Fatalf("write temporary rule-set: %v", err)
 	}

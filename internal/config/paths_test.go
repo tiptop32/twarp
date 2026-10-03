@@ -132,11 +132,11 @@ func TestPathsHelpers(t *testing.T) {
 
 	paths := config.Paths{Home: "/home", Out: "/out"}
 	got := []string{
-		paths.ConfigFile(), paths.SecretsFile(), paths.CorpIPsFile(), paths.LockFile(), paths.AuditFile(),
+		paths.ConfigFile(), paths.SecretsFile(), paths.GatewayIPsFile(), paths.LockFile(), paths.AuditFile(),
 		paths.OutConfig(), paths.RulesDir(), paths.GeoDir(),
 	}
 	want := []string{
-		"/home/twarp.yaml", "/home/secrets.yaml", "/home/corp-ips.json", "/home/corp-ips.lock", "/home/audit.jsonl",
+		"/home/twarp.yaml", "/home/secrets.yaml", "/home/gateway-ips.json", "/home/gateway-ips.lock", "/home/audit.jsonl",
 		"/out/config.json", "/out/rules", "/out/geo",
 	}
 	if !reflect.DeepEqual(got, want) {

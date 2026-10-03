@@ -9,7 +9,7 @@ import (
 	"syscall"
 )
 
-// ReadPrefixes reads the persisted corporate prefixes under a shared lock.
+// ReadPrefixes reads the persisted gateway prefixes under a shared lock.
 // It never creates the lock or state file, so root callers cannot leave files
 // owned by root in the user's configuration directory.
 func ReadPrefixes(file, lockFile string) ([]netip.Prefix, error) {
@@ -38,7 +38,7 @@ func ReadPrefixes(file, lockFile string) ([]netip.Prefix, error) {
 	return state.prefixes(), nil
 }
 
-func readStateFile(file string, corpSocks netip.Addr) (diskState, error) {
+func readStateFile(file string, gatewaySocks netip.Addr) (diskState, error) {
 	data, err := os.ReadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
 		return diskState{Version: 1, CIDRs: []Entry{}}, nil
@@ -63,7 +63,7 @@ func readStateFile(file string, corpSocks netip.Addr) (diskState, error) {
 		if entry.CIDR != entry.CIDR.Masked() {
 			return diskState{}, fmt.Errorf("decode state %q: cidrs[%d] is not masked: %s", file, i, entry.CIDR)
 		}
-		validationSocks := corpSocks
+		validationSocks := gatewaySocks
 		if !validationSocks.IsValid() {
 			validationSocks = netip.MustParseAddr("192.0.2.1")
 			if entry.CIDR.Addr().Is4() {

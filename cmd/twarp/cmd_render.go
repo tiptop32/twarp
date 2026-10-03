@@ -17,7 +17,7 @@ import (
 func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	fs := flag.NewFlagSet("twarp render", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	out := fs.String("out", "", "write config.json and rules/corp-ip.json to DIR")
+	out := fs.String("out", "", "write config.json and rules/gateway-ip.json to DIR")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -44,7 +44,7 @@ func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return 0
 	}
 
-	data, err = setCorpRuleSetPath(data, filepath.Join(*out, "rules", "corp-ip.json"))
+	data, err = setGatewayRuleSetPath(data, filepath.Join(*out, "rules", "gateway-ip.json"))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp render: prepare output: %v\n", err)
 		return 1
@@ -58,7 +58,7 @@ func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		_, _ = fmt.Fprintf(stderr, "twarp render: %v\n", err)
 		return 1
 	}
-	_, _ = fmt.Fprintf(stdout, "rendered %s and %s\n", configPath, filepath.Join(*out, "rules", "corp-ip.json"))
+	_, _ = fmt.Fprintf(stdout, "rendered %s and %s\n", configPath, filepath.Join(*out, "rules", "gateway-ip.json"))
 	return 0
 }
 
@@ -75,7 +75,7 @@ func renderInputs(system config.Sys) (config.Paths, []netip.Prefix, []byte, erro
 	if err != nil {
 		return config.Paths{}, nil, nil, err
 	}
-	prefixes, err := state.ReadPrefixes(paths.CorpIPsFile(), paths.LockFile())
+	prefixes, err := state.ReadPrefixes(paths.GatewayIPsFile(), paths.LockFile())
 	if err != nil {
 		return config.Paths{}, nil, nil, err
 	}
@@ -114,7 +114,7 @@ func maskJSONKeys(value any, keys map[string]struct{}) {
 	}
 }
 
-func setCorpRuleSetPath(data []byte, path string) ([]byte, error) {
+func setGatewayRuleSetPath(data []byte, path string) ([]byte, error) {
 	var document map[string]any
 	if err := json.Unmarshal(data, &document); err != nil {
 		return nil, err
@@ -129,12 +129,12 @@ func setCorpRuleSetPath(data []byte, path string) ([]byte, error) {
 	}
 	for _, value := range ruleSets {
 		ruleSet, ok := value.(map[string]any)
-		if ok && ruleSet["tag"] == "corp-ip" {
+		if ok && ruleSet["tag"] == "gateway-ip" {
 			ruleSet["path"] = path
 			return marshalDocument(document)
 		}
 	}
-	return nil, errors.New("rendered config has no corp-ip rule-set")
+	return nil, errors.New("rendered config has no gateway-ip rule-set")
 }
 
 func marshalDocument(document any) ([]byte, error) {

@@ -29,15 +29,15 @@ func TestStoreAddRemoveList(t *testing.T) {
 		return nil
 	}, func() bool { return true }, func() time.Time { return now }))
 
-	added, err := store.Add(context.Background(), "cli", "100.66.84.182", "new VM", false)
+	added, err := store.Add(context.Background(), "cli", "100.64.10.182", "new VM", false)
 	if err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
-	if added.Status != AddStatusAdded || added.CIDR != netip.MustParsePrefix("100.66.84.182/32") || !added.SingBoxRunning {
+	if added.Status != AddStatusAdded || added.CIDR != netip.MustParsePrefix("100.64.10.182/32") || !added.SingBoxRunning {
 		t.Fatalf("Add() = %#v", added)
 	}
 
-	duplicate, err := store.Add(context.Background(), "mcp", "100.66.84.182/32", "ignored", false)
+	duplicate, err := store.Add(context.Background(), "mcp", "100.64.10.182/32", "ignored", false)
 	if err != nil {
 		t.Fatalf("duplicate Add() error = %v", err)
 	}
@@ -45,18 +45,18 @@ func TestStoreAddRemoveList(t *testing.T) {
 		t.Fatalf("duplicate Add() = %#v", duplicate)
 	}
 
-	wide, err := store.Add(context.Background(), "cli", "100.66.85.149/24", "team subnet", false)
+	wide, err := store.Add(context.Background(), "cli", "100.64.11.149/24", "team subnet", false)
 	if err != nil {
 		t.Fatalf("wide Add() error = %v", err)
 	}
-	if wide.Status != AddStatusAdded || wide.CIDR != netip.MustParsePrefix("100.66.85.0/24") {
+	if wide.Status != AddStatusAdded || wide.CIDR != netip.MustParsePrefix("100.64.11.0/24") {
 		t.Fatalf("wide Add() = %#v", wide)
 	}
-	if want := []string{"host bits masked: 100.66.85.149/24 → 100.66.85.0/24"}; !reflect.DeepEqual(wide.Warnings, want) {
+	if want := []string{"host bits masked: 100.64.11.149/24 → 100.64.11.0/24"}; !reflect.DeepEqual(wide.Warnings, want) {
 		t.Fatalf("wide Add() warnings = %q, want %q", wide.Warnings, want)
 	}
 
-	covered, err := store.Add(context.Background(), "mcp", "100.66.85.12", "covered host", false)
+	covered, err := store.Add(context.Background(), "mcp", "100.64.11.12", "covered host", false)
 	if err != nil {
 		t.Fatalf("covered Add() error = %v", err)
 	}
@@ -69,25 +69,25 @@ func TestStoreAddRemoveList(t *testing.T) {
 		t.Fatalf("List() error = %v", err)
 	}
 	wantEntries := []Entry{
-		{CIDR: netip.MustParsePrefix("100.66.84.182/32"), Comment: "new VM", AddedBy: "cli", AddedAt: now},
-		{CIDR: netip.MustParsePrefix("100.66.85.0/24"), Comment: "team subnet", AddedBy: "cli", AddedAt: now},
+		{CIDR: netip.MustParsePrefix("100.64.10.182/32"), Comment: "new VM", AddedBy: "cli", AddedAt: now},
+		{CIDR: netip.MustParsePrefix("100.64.11.0/24"), Comment: "team subnet", AddedBy: "cli", AddedAt: now},
 	}
 	if !reflect.DeepEqual(entries, wantEntries) {
 		t.Fatalf("List() = %#v, want %#v", entries, wantEntries)
 	}
 
-	removed, err := store.Remove(context.Background(), "cli", "100.66.85.149/24")
+	removed, err := store.Remove(context.Background(), "cli", "100.64.11.149/24")
 	if err != nil {
 		t.Fatalf("Remove() error = %v", err)
 	}
 	if removed.Status != RemoveStatusRemoved || removed.CIDR != wide.CIDR || !removed.SingBoxRunning {
 		t.Fatalf("Remove() = %#v", removed)
 	}
-	if want := []string{"host bits masked: 100.66.85.149/24 → 100.66.85.0/24"}; !reflect.DeepEqual(removed.Warnings, want) {
+	if want := []string{"host bits masked: 100.64.11.149/24 → 100.64.11.0/24"}; !reflect.DeepEqual(removed.Warnings, want) {
 		t.Fatalf("Remove() warnings = %q, want %q", removed.Warnings, want)
 	}
 
-	missing, err := store.Remove(context.Background(), "mcp", "100.66.85.0/24")
+	missing, err := store.Remove(context.Background(), "mcp", "100.64.11.0/24")
 	if err != nil {
 		t.Fatalf("missing Remove() error = %v", err)
 	}
@@ -98,7 +98,7 @@ func TestStoreAddRemoveList(t *testing.T) {
 	if len(changes) != 3 {
 		t.Fatalf("OnChange calls = %d, want 3", len(changes))
 	}
-	if got := prefixStrings(changes[2]); !reflect.DeepEqual(got, []string{"100.66.84.182/32"}) {
+	if got := prefixStrings(changes[2]); !reflect.DeepEqual(got, []string{"100.64.10.182/32"}) {
 		t.Fatalf("last OnChange prefixes = %v", got)
 	}
 
@@ -122,7 +122,7 @@ func TestStoreListSortsByAddressThenPrefixLength(t *testing.T) {
 
 	dir := t.TempDir()
 	store := New(testOptions(dir, nil, nil, nil))
-	for _, input := range []string{"100.66.2.1", "100.66.1.0", "100.66.1.0/24"} {
+	for _, input := range []string{"100.64.12.1", "100.64.11.0", "100.64.11.0/24"} {
 		if _, err := store.Add(context.Background(), "cli", input, "", false); err != nil {
 			t.Fatalf("Add(%q) error = %v", input, err)
 		}
@@ -135,7 +135,7 @@ func TestStoreListSortsByAddressThenPrefixLength(t *testing.T) {
 	for i, entry := range entries {
 		got[i] = entry.CIDR.String()
 	}
-	want := []string{"100.66.1.0/24", "100.66.1.0/32", "100.66.2.1/32"}
+	want := []string{"100.64.11.0/24", "100.64.11.0/32", "100.64.12.1/32"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("List() = %v, want %v", got, want)
 	}
@@ -146,12 +146,12 @@ func TestStoreExactMatchWinsOverCoveringEntry(t *testing.T) {
 
 	dir := t.TempDir()
 	store := New(testOptions(dir, nil, nil, nil))
-	for _, input := range []string{"100.66.1.0/32", "100.66.1.0/24"} {
+	for _, input := range []string{"100.64.11.0/32", "100.64.11.0/24"} {
 		if _, err := store.Add(context.Background(), "cli", input, "", false); err != nil {
 			t.Fatalf("Add(%q) error = %v", input, err)
 		}
 	}
-	result, err := store.Add(context.Background(), "cli", "100.66.1.0/32", "", false)
+	result, err := store.Add(context.Background(), "cli", "100.64.11.0/32", "", false)
 	if err != nil {
 		t.Fatalf("duplicate Add() error = %v", err)
 	}
@@ -168,13 +168,13 @@ func TestStoreRejectsEntryBeyondLimit(t *testing.T) {
 	entries := make([]Entry, 255)
 	for i := range entries {
 		entries[i] = Entry{
-			CIDR:    netip.MustParsePrefix(fmt.Sprintf("100.66.%d.%d/32", i/256, i%256)),
+			CIDR:    netip.MustParsePrefix(fmt.Sprintf("100.64.%d.%d/32", i/256, i%256)),
 			AddedBy: "cli",
 			AddedAt: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC),
 		}
 	}
 	writeStateFixture(t, opts.File, diskState{Version: 1, CIDRs: entries})
-	result, err := New(opts).Add(context.Background(), "mcp", "100.66.0.255/32", "256th", false)
+	result, err := New(opts).Add(context.Background(), "mcp", "100.64.10.255/32", "256th", false)
 	if err != nil {
 		t.Fatalf("256th Add() error = %v", err)
 	}
@@ -183,7 +183,7 @@ func TestStoreRejectsEntryBeyondLimit(t *testing.T) {
 	}
 	original := mustReadFile(t, opts.File)
 
-	_, err = New(opts).Add(context.Background(), "mcp", "100.66.1.0/32", "257th", false)
+	_, err = New(opts).Add(context.Background(), "mcp", "100.64.11.0/32", "257th", false)
 	if err == nil || !strings.Contains(err.Error(), "maximum 256 entries") {
 		t.Fatalf("257th Add() error = %v, want maximum 256 entries", err)
 	}
@@ -216,7 +216,7 @@ func TestStoreDoesNotOverwriteUnreadableState(t *testing.T) {
 				return nil
 			}
 
-			_, err := New(opts).Add(context.Background(), "cli", "100.66.1.1", "", false)
+			_, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false)
 			if err == nil || !strings.Contains(err.Error(), opts.File) {
 				t.Fatalf("Add() error = %v, want path %q", err, opts.File)
 			}
@@ -239,7 +239,7 @@ func TestStoreRejectsUnsafePersistedEntryWithoutChangingFile(t *testing.T) {
 	if err := os.WriteFile(opts.File, original, 0o600); err != nil {
 		t.Fatalf("write unsafe state: %v", err)
 	}
-	_, err := New(opts).Add(context.Background(), "cli", "100.66.1.1", "", false)
+	_, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false)
 	if err == nil || !strings.Contains(err.Error(), opts.File) {
 		t.Fatalf("Add() error = %v, want path %q", err, opts.File)
 	}
@@ -253,7 +253,7 @@ func TestStorePersistsStateBeforeOnChangeError(t *testing.T) {
 
 	dir := t.TempDir()
 	opts := testOptions(dir, func([]netip.Prefix) error { return errors.New("render failed") }, func() bool { return true }, nil)
-	result, err := New(opts).Add(context.Background(), "cli", "100.66.1.1", "", false)
+	result, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false)
 	if err == nil || !strings.Contains(err.Error(), "state saved but OnChange failed: render failed") {
 		t.Fatalf("Add() error = %v", err)
 	}
@@ -266,7 +266,7 @@ func TestStorePersistsStateBeforeOnChangeError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if len(entries) != 1 || entries[0].CIDR.String() != "100.66.1.1/32" {
+	if len(entries) != 1 || entries[0].CIDR.String() != "100.64.11.1/32" {
 		t.Fatalf("persisted entries = %#v", entries)
 	}
 	audit := readAudit(t, opts.AuditFile)
@@ -280,11 +280,11 @@ func TestStoreAuditsRemoveAfterOnChangeError(t *testing.T) {
 
 	dir := t.TempDir()
 	opts := testOptions(dir, nil, func() bool { return true }, nil)
-	if _, err := New(opts).Add(context.Background(), "cli", "100.66.1.1", "", false); err != nil {
+	if _, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false); err != nil {
 		t.Fatalf("seed Add() error = %v", err)
 	}
 	opts.OnChange = func([]netip.Prefix) error { return errors.New("render failed") }
-	result, err := New(opts).Remove(context.Background(), "cli", "100.66.1.1")
+	result, err := New(opts).Remove(context.Background(), "cli", "100.64.11.1")
 	if err == nil || !strings.Contains(err.Error(), "state saved but OnChange failed: render failed") {
 		t.Fatalf("Remove() error = %v", err)
 	}
@@ -311,7 +311,7 @@ func TestStoreWarnsWhenSingBoxIsNotRunning(t *testing.T) {
 
 	dir := t.TempDir()
 	result, err := New(testOptions(dir, nil, func() bool { return false }, nil)).Add(
-		context.Background(), "cli", "100.66.1.1", "", false,
+		context.Background(), "cli", "100.64.11.1", "", false,
 	)
 	if err != nil {
 		t.Fatalf("Add() error = %v", err)
@@ -335,11 +335,11 @@ func TestStoreRunsHealthCheckAfterUnlock(t *testing.T) {
 	opts.Running = func() bool {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_, err := probe.Add(ctx, "cli", "100.66.1.2", "health probe", false)
+		_, err := probe.Add(ctx, "cli", "100.64.11.2", "health probe", false)
 		return err == nil
 	}
 
-	result, err := New(opts).Add(context.Background(), "cli", "100.66.1.1", "", false)
+	result, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false)
 	if err != nil {
 		t.Fatalf("Add() error = %v", err)
 	}
@@ -372,7 +372,7 @@ func TestStoreLockWaitHonorsContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err = New(opts).Add(ctx, "mcp", "100.66.1.1", "", false)
+	_, err = New(opts).Add(ctx, "mcp", "100.64.11.1", "", false)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Add() error = %v, want context deadline exceeded", err)
 	}
@@ -398,7 +398,7 @@ func TestStoreConcurrentAddsAcrossInstances(t *testing.T) {
 			<-start
 			for offset := 0; offset < perWorker; offset++ {
 				lastOctet := worker*perWorker + offset
-				input := fmt.Sprintf("100.66.0.%d", lastOctet)
+				input := fmt.Sprintf("100.64.10.%d", lastOctet)
 				if _, err := store.Add(context.Background(), "mcp", input, "concurrent", false); err != nil {
 					errorsByWorker <- fmt.Errorf("Add(%s): %w", input, err)
 					return
@@ -447,11 +447,11 @@ func TestStoreConcurrentAddsAcrossInstances(t *testing.T) {
 
 func testOptions(dir string, onChange func([]netip.Prefix) error, running func() bool, now func() time.Time) Options {
 	return Options{
-		File:          filepath.Join(dir, "corp-ips.json"),
-		LockFile:      filepath.Join(dir, "corp-ips.lock"),
+		File:          filepath.Join(dir, "gateway-ips.json"),
+		LockFile:      filepath.Join(dir, "gateway-ips.lock"),
 		AuditFile:     filepath.Join(dir, "audit.jsonl"),
 		AllowedRanges: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")},
-		CorpSocks:     netip.MustParseAddr("100.64.70.28"),
+		GatewaySocks:  netip.MustParseAddr("192.168.1.10"),
 		OnChange:      onChange,
 		Running:       running,
 		Now:           now,

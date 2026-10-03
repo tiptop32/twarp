@@ -73,7 +73,7 @@ func TestRunDoesNotOverwriteExistingConfigWithoutForce(t *testing.T) {
 			}
 			path := paths.ConfigFile()
 			if destination == "state" {
-				path = paths.CorpIPsFile()
+				path = paths.GatewayIPsFile()
 			}
 			original := []byte("existing destination\n")
 			if err := os.WriteFile(path, original, 0o600); err != nil {
@@ -109,9 +109,9 @@ func TestRunSelectsAllowedRangesAndWarnsAboutIgnoredProtocols(t *testing.T) {
       host: ignored.example
   - socks5:
       host: 192.0.2.10:1080
-      domains: [corp.example]
-      dns: [100.64.70.28]
-      ips: [100.66.1.1/32, 10.1.2.3/32, 172.16.2.3/32, 192.168.2.3/32, 203.0.113.9/32]
+      domains: [gateway.example]
+      dns: [100.64.0.53]
+      ips: [100.64.11.1/32, 10.1.2.3/32, 172.16.2.3/32, 192.168.2.3/32, 203.0.113.9/32]
 `
 	if err := os.WriteFile(source, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
@@ -132,12 +132,12 @@ func TestRunSelectsAllowedRangesAndWarnsAboutIgnoredProtocols(t *testing.T) {
 		netip.MustParsePrefix("192.168.0.0/16"),
 		netip.MustParsePrefix("203.0.113.9/32"),
 	}
-	if !reflect.DeepEqual(got.Corp.AllowedRanges, want) {
-		t.Fatalf("allowed ranges = %#v, want %#v", got.Corp.AllowedRanges, want)
+	if !reflect.DeepEqual(got.Gateway.AllowedRanges, want) {
+		t.Fatalf("allowed ranges = %#v, want %#v", got.Gateway.AllowedRanges, want)
 	}
 	for _, warning := range []string{
 		"ignored warp protocol ssh",
-		"public range 203.0.113.9/32 added to corp.allowed_ranges",
+		"public range 203.0.113.9/32 added to gateway.allowed_ranges",
 	} {
 		if !contains(report.Warnings, warning) {
 			t.Errorf("Run() warnings = %q, want %q", report.Warnings, warning)
@@ -176,7 +176,7 @@ func TestRunMigratesWarpConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if report.ConfigWritten != paths.ConfigFile() || report.StateWritten != paths.CorpIPsFile() || report.CIDRs != 8 {
+	if report.ConfigWritten != paths.ConfigFile() || report.StateWritten != paths.GatewayIPsFile() || report.CIDRs != 8 {
 		t.Fatalf("Run() report = %#v", report)
 	}
 	info, err := os.Stat(paths.Home)
@@ -191,16 +191,16 @@ func TestRunMigratesWarpConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(migrated config) error = %v", err)
 	}
-	wantDomains := []string{"x5.ru", "express.ms", "ktalk.ru", "ktalk.host", "rutube.ru", "lemanapro.ru"}
+	wantDomains := []string{"intra.example", "chat.example", "meet.example", "video.example", "shop.example", "docs.example"}
 	wantRanges := []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")}
-	if gotConfig.Corp.Socks != "192.168.0.105:8080" || gotConfig.Corp.DNS != "100.64.70.28" {
-		t.Errorf("migrated corp endpoints = socks %q, DNS %q", gotConfig.Corp.Socks, gotConfig.Corp.DNS)
+	if gotConfig.Gateway.Socks != "192.168.1.10:1080" || gotConfig.Gateway.DNS != "100.64.0.53" {
+		t.Errorf("migrated gateway endpoints = socks %q, DNS %q", gotConfig.Gateway.Socks, gotConfig.Gateway.DNS)
 	}
-	if !reflect.DeepEqual(gotConfig.Corp.Domains, wantDomains) {
-		t.Errorf("migrated domains = %#v, want %#v", gotConfig.Corp.Domains, wantDomains)
+	if !reflect.DeepEqual(gotConfig.Gateway.Domains, wantDomains) {
+		t.Errorf("migrated domains = %#v, want %#v", gotConfig.Gateway.Domains, wantDomains)
 	}
-	if !reflect.DeepEqual(gotConfig.Corp.AllowedRanges, wantRanges) {
-		t.Errorf("migrated allowed ranges = %#v, want %#v", gotConfig.Corp.AllowedRanges, wantRanges)
+	if !reflect.DeepEqual(gotConfig.Gateway.AllowedRanges, wantRanges) {
+		t.Errorf("migrated allowed ranges = %#v, want %#v", gotConfig.Gateway.AllowedRanges, wantRanges)
 	}
 	if !reflect.DeepEqual(gotConfig.Direct.LocalDomains, []string{"home.arpa"}) {
 		t.Errorf("migrated local domains = %#v, want [home.arpa]", gotConfig.Direct.LocalDomains)
@@ -210,30 +210,30 @@ func TestRunMigratesWarpConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(configText), "# fallback corp DNS (manual): 192.168.39.45") {
+	if !strings.Contains(string(configText), "# fallback gateway DNS (manual): 192.168.100.53") {
 		t.Errorf("migrated config lacks fallback DNS comment:\n%s", configText)
 	}
 
 	store := state.New(state.Options{
-		File:          paths.CorpIPsFile(),
+		File:          paths.GatewayIPsFile(),
 		LockFile:      paths.LockFile(),
 		AuditFile:     paths.AuditFile(),
 		AllowedRanges: wantRanges,
-		CorpSocks:     netip.MustParseAddr("192.168.0.105"),
+		GatewaySocks:  netip.MustParseAddr("192.168.1.10"),
 	})
 	entries, err := store.List()
 	if err != nil {
 		t.Fatalf("List(migrated state) error = %v", err)
 	}
 	wantCIDRs := map[string]bool{
-		"100.66.84.182/32": true,
-		"100.66.83.242/32": true,
-		"100.66.83.108/32": true,
-		"100.126.7.247/32": true,
-		"100.66.64.12/32":  true,
-		"100.66.64.13/32":  true,
-		"100.66.65.0/24":   true,
-		"100.65.33.0/24":   true,
+		"100.64.10.182/32": true,
+		"100.64.10.242/32": true,
+		"100.64.10.108/32": true,
+		"100.127.1.1/32":   true,
+		"100.64.12.12/32":  true,
+		"100.64.12.13/32":  true,
+		"100.64.11.0/24":   true,
+		"100.64.12.0/24":   true,
 	}
 	if len(entries) != len(wantCIDRs) {
 		t.Fatalf("migrated CIDRs = %d, want %d", len(entries), len(wantCIDRs))
@@ -248,9 +248,9 @@ func TestRunMigratesWarpConfig(t *testing.T) {
 	}
 
 	wantWarnings := []string{
-		"host bits masked: 100.66.65.149/24 → 100.66.65.0/24",
-		"host bits masked: 100.65.33.160/24 → 100.65.33.0/24",
-		"e.mail.ru is already routed direct by the .ru rule",
+		"host bits masked: 100.64.11.149/24 → 100.64.11.0/24",
+		"host bits masked: 100.64.12.160/24 → 100.64.12.0/24",
+		"mail.example.ru is already routed direct by the .ru rule",
 	}
 	for _, warning := range wantWarnings {
 		if !contains(report.Warnings, warning) {
@@ -292,12 +292,12 @@ func TestRunForceFailureKeepsExistingFiles(t *testing.T) {
 	if err := os.WriteFile(paths.ConfigFile(), originalConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(paths.CorpIPsFile(), originalState, 0o600); err != nil {
+	if err := os.WriteFile(paths.GatewayIPsFile(), originalState, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	source := filepath.Join(dir, "warp.yaml")
-	legacy := "protocols:\n  - socks5:\n      host: 192.168.0.105:8080\n      domains: [x5.ru]\n      dns: [100.64.70.28]\n" +
-		"      ips: [100.66.84.182/32, 100.66.0.0/8]\n"
+	legacy := "protocols:\n  - socks5:\n      host: 192.168.1.10:1080\n      domains: [intra.example]\n      dns: [100.64.0.53]\n" +
+		"      ips: [100.64.10.182/32, 100.64.10.0/8]\n"
 	if err := os.WriteFile(source, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestRunForceFailureKeepsExistingFiles(t *testing.T) {
 		t.Fatal("Run() error = nil, want rejected /8 CIDR")
 	}
 
-	for path, want := range map[string][]byte{paths.ConfigFile(): originalConfig, paths.CorpIPsFile(): originalState} {
+	for path, want := range map[string][]byte{paths.ConfigFile(): originalConfig, paths.GatewayIPsFile(): originalState} {
 		got, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

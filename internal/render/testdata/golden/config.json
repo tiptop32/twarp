@@ -6,9 +6,9 @@
     "servers": [
       {
         "type": "tcp",
-        "tag": "corp",
-        "server": "100.64.70.28",
-        "detour": "corp"
+        "tag": "gateway",
+        "server": "100.64.0.53",
+        "detour": "gateway"
       },
       {
         "type": "udp",
@@ -30,10 +30,10 @@
     "rules": [
       {
         "domain_suffix": [
-          "corp.example",
+          "gateway.example",
           "internal.example"
         ],
-        "server": "corp"
+        "server": "gateway"
       },
       {
         "domain_suffix": [
@@ -79,7 +79,7 @@
     },
     {
       "type": "socks",
-      "tag": "corp",
+      "tag": "gateway",
       "server": "192.0.2.10",
       "server_port": 1080,
       "version": "5"
@@ -124,16 +124,16 @@
       },
       {
         "domain_suffix": [
-          "corp.example",
+          "gateway.example",
           "internal.example"
         ],
-        "outbound": "corp"
+        "outbound": "gateway"
       },
       {
         "rule_set": [
-          "corp-ip"
+          "gateway-ip"
         ],
-        "outbound": "corp"
+        "outbound": "gateway"
       },
       {
         "ip_is_private": true,
@@ -165,9 +165,9 @@
     "rule_set": [
       {
         "type": "local",
-        "tag": "corp-ip",
+        "tag": "gateway-ip",
         "format": "source",
-        "path": "${OUT}/rules/corp-ip.json"
+        "path": "${OUT}/rules/gateway-ip.json"
       },
       {
         "type": "local",

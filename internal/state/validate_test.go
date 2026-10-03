@@ -16,19 +16,19 @@ func TestNormalize(t *testing.T) {
 		wantWarnings []string
 		wantErr      string
 	}{
-		{name: "bare IPv4", input: "100.66.1.1", wantPrefix: "100.66.1.1/32"},
+		{name: "bare IPv4", input: "100.64.11.1", wantPrefix: "100.64.11.1/32"},
 		{name: "bare IPv6", input: "2001:db8::1", wantPrefix: "2001:db8::1/128"},
 		{
-			name: "IPv4 host bits", input: "100.66.65.149/24", wantPrefix: "100.66.65.0/24",
-			wantWarnings: []string{"host bits masked: 100.66.65.149/24 → 100.66.65.0/24"},
+			name: "IPv4 host bits", input: "100.64.11.149/24", wantPrefix: "100.64.11.0/24",
+			wantWarnings: []string{"host bits masked: 100.64.11.149/24 → 100.64.11.0/24"},
 		},
 		{
 			name: "IPv6 host bits", input: "2001:db8:abcd:12::dead/64", wantPrefix: "2001:db8:abcd:12::/64",
 			wantWarnings: []string{"host bits masked: 2001:db8:abcd:12::dead/64 → 2001:db8:abcd:12::/64"},
 		},
-		{name: "bare mapped IPv4", input: "::ffff:100.66.1.1", wantPrefix: "100.66.1.1/32"},
-		{name: "mapped IPv4 prefix", input: "::ffff:100.66.1.0/120", wantPrefix: "100.66.1.0/24"},
-		{name: "mapped prefix shorter than mapping", input: "::ffff:100.66.1.1/95", wantErr: "mapped IPv6 prefix /95 is shorter than /96"},
+		{name: "bare mapped IPv4", input: "::ffff:100.64.11.1", wantPrefix: "100.64.11.1/32"},
+		{name: "mapped IPv4 prefix", input: "::ffff:100.64.11.0/120", wantPrefix: "100.64.11.0/24"},
+		{name: "mapped prefix shorter than mapping", input: "::ffff:100.64.11.1/95", wantErr: "mapped IPv6 prefix /95 is shorter than /96"},
 		{name: "invalid input", input: "not-an-address", wantErr: "parse IP or CIDR"},
 	}
 
@@ -56,7 +56,7 @@ func TestNormalize(t *testing.T) {
 
 func TestStoreHardRulesCannotBeForced(t *testing.T) {
 	allowedRanges := prefixes(t, "0.0.0.0/0", "::/0")
-	corpSocks := netip.MustParseAddr("100.66.10.42")
+	gatewaySocks := netip.MustParseAddr("100.64.10.42")
 	tests := []struct {
 		name    string
 		prefix  string
@@ -76,14 +76,14 @@ func TestStoreHardRulesCannotBeForced(t *testing.T) {
 		{name: "IPv4 multicast", prefix: "239.0.0.0/24", wantErr: "multicast"},
 		{name: "IPv6 multicast", prefix: "ff05::/64", wantErr: "multicast"},
 		{name: "limited broadcast", prefix: "255.255.255.255/32", wantErr: "limited broadcast"},
-		{name: "contains corporate SOCKS", prefix: "100.66.10.0/24", wantErr: "contains corporate SOCKS address 100.66.10.42"},
+		{name: "contains gateway SOCKS", prefix: "100.64.10.0/24", wantErr: "contains gateway SOCKS address 100.64.10.42"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := testOptions(t.TempDir(), nil, nil, nil)
 			opts.AllowedRanges = allowedRanges
-			opts.CorpSocks = corpSocks
+			opts.GatewaySocks = gatewaySocks
 			_, err := New(opts).Add(context.Background(), "cli", tt.prefix, "", true)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("Add(%q, force=true) error = %v, want error containing %q", tt.prefix, err, tt.wantErr)
@@ -94,14 +94,14 @@ func TestStoreHardRulesCannotBeForced(t *testing.T) {
 
 func TestStoreAllowedRanges(t *testing.T) {
 	allowedRanges := prefixes(t, "100.64.0.0/10", "10.0.0.0/8")
-	corpSocks := netip.MustParseAddr("192.0.2.10")
+	gatewaySocks := netip.MustParseAddr("192.0.2.10")
 	tests := []struct {
 		name    string
 		prefix  string
 		force   bool
 		wantErr string
 	}{
-		{name: "inside one allowed range", prefix: "100.66.65.0/24"},
+		{name: "inside one allowed range", prefix: "100.64.11.0/24"},
 		{name: "outside allowed ranges", prefix: "8.8.0.0/16", wantErr: "prefix 8.8.0.0/16 is outside allowed ranges: 100.64.0.0/10, 10.0.0.0/8"},
 		{name: "force overrides allowed ranges", prefix: "8.8.0.0/16", force: true},
 	}
@@ -110,7 +110,7 @@ func TestStoreAllowedRanges(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := testOptions(t.TempDir(), nil, func() bool { return true }, nil)
 			opts.AllowedRanges = allowedRanges
-			opts.CorpSocks = corpSocks
+			opts.GatewaySocks = gatewaySocks
 			_, err := New(opts).Add(context.Background(), "cli", tt.prefix, "", tt.force)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -128,19 +128,19 @@ func TestStoreAllowedRanges(t *testing.T) {
 func TestStoreRequiresContainmentInOneAllowedRange(t *testing.T) {
 	opts := testOptions(t.TempDir(), nil, nil, nil)
 	opts.AllowedRanges = prefixes(t, "10.0.0.0/17", "10.0.128.0/17")
-	opts.CorpSocks = netip.MustParseAddr("192.0.2.10")
+	opts.GatewaySocks = netip.MustParseAddr("192.0.2.10")
 	_, err := New(opts).Add(context.Background(), "cli", "10.0.0.0/16", "", false)
 	if err == nil || !strings.Contains(err.Error(), "outside allowed ranges") {
 		t.Fatalf("Add() error = %v, want outside allowed ranges error", err)
 	}
 }
 
-func TestStoreRequiresCorpSocksConfiguration(t *testing.T) {
+func TestStoreRequiresGatewaySocksConfiguration(t *testing.T) {
 	opts := testOptions(t.TempDir(), nil, nil, nil)
-	opts.CorpSocks = netip.Addr{}
-	_, err := New(opts).Add(context.Background(), "cli", "100.66.1.1", "", false)
-	if err == nil || !strings.Contains(err.Error(), "corporate SOCKS address is not configured") {
-		t.Fatalf("Add() error = %v, want missing corporate SOCKS error", err)
+	opts.GatewaySocks = netip.Addr{}
+	_, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false)
+	if err == nil || !strings.Contains(err.Error(), "gateway SOCKS address is not configured") {
+		t.Fatalf("Add() error = %v, want missing gateway SOCKS error", err)
 	}
 }
 

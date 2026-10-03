@@ -34,15 +34,15 @@ var validLogLevels = map[string]struct{}{
 
 // Config is the validated contents of twarp.yaml.
 type Config struct {
-	Corp     CorpConfig
+	Gateway  GatewayConfig
 	Direct   DirectConfig
 	VPN      VPNConfig
 	ClashAPI string
 	LogLevel string
 }
 
-// CorpConfig configures access to corporate resources.
-type CorpConfig struct {
+// GatewayConfig configures access to gateway resources.
+type GatewayConfig struct {
 	Socks         string
 	Domains       []string
 	DNS           string
@@ -67,12 +67,12 @@ type Secrets struct {
 }
 
 type rawConfig struct {
-	Corp struct {
+	Gateway struct {
 		Socks         string   `yaml:"socks"`
 		Domains       []string `yaml:"domains"`
 		DNS           string   `yaml:"dns"`
 		AllowedRanges []string `yaml:"allowed_ranges"`
-	} `yaml:"corp"`
+	} `yaml:"gateway"`
 	Direct struct {
 		DNS          string   `yaml:"dns"`
 		LocalDomains []string `yaml:"local_domains"`
@@ -175,7 +175,7 @@ func SaveSecrets(path string, secrets Secrets) (returnErr error) {
 
 func defaultRawConfig() rawConfig {
 	var raw rawConfig
-	raw.Corp.AllowedRanges = []string{"100.64.0.0/10"}
+	raw.Gateway.AllowedRanges = []string{"100.64.0.0/10"}
 	raw.Direct.DNS = defaultDirectDNS
 	raw.Direct.LocalDomains = []string{"home.arpa"}
 	raw.VPN.DNS = defaultVPNDNS
@@ -185,26 +185,26 @@ func defaultRawConfig() rawConfig {
 }
 
 func validateConfig(raw rawConfig) (Config, error) {
-	if raw.Corp.Socks == "" {
-		return Config{}, errors.New("corp.socks is required")
+	if raw.Gateway.Socks == "" {
+		return Config{}, errors.New("gateway.socks is required")
 	}
-	if !validHostPort(raw.Corp.Socks) {
-		return Config{}, errors.New("corp.socks must be host:port with a port from 1 to 65535")
+	if !validHostPort(raw.Gateway.Socks) {
+		return Config{}, errors.New("gateway.socks must be host:port with a port from 1 to 65535")
 	}
-	if len(raw.Corp.Domains) == 0 {
-		return Config{}, errors.New("corp.domains is required and must not be empty")
+	if len(raw.Gateway.Domains) == 0 {
+		return Config{}, errors.New("gateway.domains is required and must not be empty")
 	}
-	corpDomains, err := normalizeDomains("corp.domains", raw.Corp.Domains)
+	gatewayDomains, err := normalizeDomains("gateway.domains", raw.Gateway.Domains)
 	if err != nil {
 		return Config{}, err
 	}
-	if raw.Corp.DNS == "" {
-		return Config{}, errors.New("corp.dns is required")
+	if raw.Gateway.DNS == "" {
+		return Config{}, errors.New("gateway.dns is required")
 	}
-	if _, err := netip.ParseAddr(raw.Corp.DNS); err != nil {
-		return Config{}, errors.New("corp.dns must be an IP address")
+	if _, err := netip.ParseAddr(raw.Gateway.DNS); err != nil {
+		return Config{}, errors.New("gateway.dns must be an IP address")
 	}
-	allowedRanges, err := parseAllowedRanges(raw.Corp.AllowedRanges)
+	allowedRanges, err := parseAllowedRanges(raw.Gateway.AllowedRanges)
 	if err != nil {
 		return Config{}, err
 	}
@@ -226,10 +226,10 @@ func validateConfig(raw rawConfig) (Config, error) {
 	}
 
 	return Config{
-		Corp: CorpConfig{
-			Socks:         raw.Corp.Socks,
-			Domains:       corpDomains,
-			DNS:           raw.Corp.DNS,
+		Gateway: GatewayConfig{
+			Socks:         raw.Gateway.Socks,
+			Domains:       gatewayDomains,
+			DNS:           raw.Gateway.DNS,
 			AllowedRanges: allowedRanges,
 		},
 		Direct:   DirectConfig{DNS: raw.Direct.DNS, LocalDomains: localDomains},
@@ -269,10 +269,10 @@ func parseAllowedRanges(values []string) ([]netip.Prefix, error) {
 	for _, value := range values {
 		prefix, err := netip.ParsePrefix(value)
 		if err != nil {
-			return nil, fmt.Errorf("corp.allowed_ranges contains invalid prefix %q: %w", value, err)
+			return nil, fmt.Errorf("gateway.allowed_ranges contains invalid prefix %q: %w", value, err)
 		}
 		if prefix.Bits() < 8 {
-			return nil, fmt.Errorf("corp.allowed_ranges prefix %q must not be wider than /8", value)
+			return nil, fmt.Errorf("gateway.allowed_ranges prefix %q must not be wider than /8", value)
 		}
 		ranges = append(ranges, prefix.Masked())
 	}

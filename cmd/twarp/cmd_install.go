@@ -46,7 +46,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		},
 		RenderConfig: func() ([]byte, error) {
 			var err error
-			prefixes, err = state.ReadPrefixes(paths.CorpIPsFile(), paths.LockFile())
+			prefixes, err = state.ReadPrefixes(paths.GatewayIPsFile(), paths.LockFile())
 			if err != nil {
 				return nil, err
 			}
