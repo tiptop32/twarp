@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -29,7 +30,13 @@ type socksServer struct {
 	counts    map[string]int
 	conns     map[net.Conn]struct{}
 	waitGroup sync.WaitGroup
+	relay     atomic.Bool
 }
+
+// EnableRelay makes the stub forward CONNECT requests to their destination
+// instead of discarding the payload, so traffic detoured through the gateway
+// (for example TCP DNS) actually reaches its target.
+func (s *socksServer) EnableRelay() { s.relay.Store(true) }
 
 func startSOCKSServer(t *testing.T) *socksServer {
 	t.Helper()
@@ -142,7 +149,20 @@ func (s *socksServer) handle(conn net.Conn) {
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	_, _ = io.Copy(io.Discard, conn)
+	if !s.relay.Load() {
+		_, _ = io.Copy(io.Discard, conn)
+		return
+	}
+	upstream, err := net.DialTimeout("tcp", destination, 2*time.Second)
+	if err != nil {
+		return
+	}
+	defer func() { _ = upstream.Close() }()
+	go func() {
+		_, _ = io.Copy(upstream, conn)
+		_ = upstream.Close()
+	}()
+	_, _ = io.Copy(conn, upstream)
 }
 
 func readSOCKSHost(reader io.Reader, addressType byte) (string, error) {
@@ -232,9 +252,26 @@ func startSingBox(t *testing.T, socksPort int, initialRuleSet []byte) *singBoxPr
 		t.Fatalf("write sing-box config: %v", err)
 	}
 
+	box := startSingBoxWithConfig(t, configPath, mixedPort, clashPort, clashSecret)
+	box.ruleSetPath = ruleSetPath
+	return box
+}
+
+func startSingBoxWithConfig(
+	t *testing.T,
+	configPath string,
+	mixedPort int,
+	clashPort int,
+	clashSecret string,
+) *singBoxProcess {
+	t.Helper()
+	if _, err := os.Stat(singBoxPath); err != nil {
+		t.Fatalf("sing-box 1.14 binary at %s: %v", singBoxPath, err)
+	}
+	directory := filepath.Dir(configPath)
 	box := &singBoxProcess{
 		directory:   directory,
-		ruleSetPath: ruleSetPath,
+		ruleSetPath: filepath.Join(directory, "rules", "gateway-ip.json"),
 		mixedPort:   mixedPort,
 		clashPort:   clashPort,
 		clashSecret: clashSecret,
@@ -287,9 +324,15 @@ func (b *singBoxProcess) waitUntilReady(t *testing.T) {
 			t.Fatalf("sing-box exited before readiness: %v\n%s", err, b.Log())
 		default:
 		}
-		conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(b.mixedPort)), 100*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
+		inboundReady := b.mixedPort == 0
+		if !inboundReady {
+			conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(b.mixedPort)), 100*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				inboundReady = true
+			}
+		}
+		if inboundReady {
 			if _, err := b.connections(); err == nil {
 				return
 			}
@@ -358,6 +401,7 @@ type clashConnections struct {
 		Metadata struct {
 			DestinationIP   string `json:"destinationIP"`
 			DestinationPort string `json:"destinationPort"`
+			Host            string `json:"host"`
 		} `json:"metadata"`
 	} `json:"connections"`
 }
@@ -391,7 +435,8 @@ func (b *singBoxProcess) outboundWithin(destination, tag string, timeout time.Du
 		connections, err := b.connections()
 		if err == nil {
 			for _, connection := range connections.Connections {
-				if connection.Metadata.DestinationIP == host && connection.Metadata.DestinationPort == port &&
+				if (connection.Metadata.DestinationIP == host || connection.Metadata.Host == host) &&
+					connection.Metadata.DestinationPort == port &&
 					contains(connection.Chains, tag) {
 					return true
 				}
@@ -418,7 +463,8 @@ func (b *singBoxProcess) waitForNoOutbound(t *testing.T, destination string, tim
 		if err == nil {
 			found := false
 			for _, connection := range connections.Connections {
-				if connection.Metadata.DestinationIP == host && connection.Metadata.DestinationPort == port {
+				if (connection.Metadata.DestinationIP == host || connection.Metadata.Host == host) &&
+					connection.Metadata.DestinationPort == port {
 					found = true
 					break
 				}
