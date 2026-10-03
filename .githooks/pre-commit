@@ -1,0 +1,4 @@
+#!/bin/sh
+# Gate: unit tests, lint and secret scan before every commit.
+set -eu
+exec make test lint secrets-check

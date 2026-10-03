@@ -1,0 +1,11 @@
+title = "twarp gitleaks config"
+
+[extend]
+useDefault = true
+
+# VLESS URIs carry the user UUID and Reality keys.
+[[rules]]
+id = "vless-uri"
+description = "VLESS URI with credentials"
+regex = '''vless://[0-9a-fA-F-]{36}@[^\s"']+'''
+keywords = ["vless://"]
