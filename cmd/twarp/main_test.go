@@ -41,7 +41,7 @@ func TestRunUsage(t *testing.T) {
 }
 
 func TestRunStubs(t *testing.T) {
-	names := []string{"status", "mcp"}
+	names := []string{"mcp"}
 	for _, name := range names {
 		var stdout, stderr bytes.Buffer
 		if code := run([]string{name}, &stdout, &stderr); code != 1 {

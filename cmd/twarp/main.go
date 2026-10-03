@@ -2,12 +2,16 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/launchd"
@@ -46,9 +50,15 @@ type cliDeps struct {
 	Runner     sysexec.Runner
 	FS         launchd.FS
 	Executable func() (string, error)
+	Dial       func(context.Context, string, string) (net.Conn, error)
+	HTTPClient *http.Client
+	LookupIP   func(context.Context, string, string) ([]net.IP, error)
+	Now        func() time.Time
 }
 
 func defaultCLIDeps() cliDeps {
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	dialer := &net.Dialer{}
 	return cliDeps{
 		Sys:        config.OSSys{},
 		Stdin:      os.Stdin,
@@ -56,6 +66,10 @@ func defaultCLIDeps() cliDeps {
 		Runner:     sysexec.ExecRunner{},
 		FS:         launchd.OSFS{},
 		Executable: os.Executable,
+		Dial:       dialer.DialContext,
+		HTTPClient: httpClient,
+		LookupIP:   net.DefaultResolver.LookupIP,
+		Now:        time.Now,
 		Clash: func(cfg config.Config, secrets config.Secrets) func() bool {
 			return singbox.Clash{Addr: cfg.ClashAPI, Secret: secrets.ClashSecret}.RunningFunc()
 		},
@@ -92,6 +106,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runGateway(args[1:], stdout, stderr, deps)
 	case "geo":
 		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: deps.Sys})
+	case "status":
+		return runStatus(args[1:], stdout, stderr, deps)
 	}
 	for _, c := range commands {
 		if c.name == args[0] {
