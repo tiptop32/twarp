@@ -41,7 +41,7 @@ func TestRunUsage(t *testing.T) {
 }
 
 func TestRunStubs(t *testing.T) {
-	names := []string{"render", "apply", "install", "uninstall", "status", "mcp"}
+	names := []string{"status", "mcp"}
 	for _, name := range names {
 		var stdout, stderr bytes.Buffer
 		if code := run([]string{name}, &stdout, &stderr); code != 1 {
@@ -51,6 +51,14 @@ func TestRunStubs(t *testing.T) {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("%s: stderr = %q, want %q", name, stderr.String(), want)
 		}
+	}
+}
+
+func TestRunWithDepsDispatchesGeoUsingInjectedSystem(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runWithDeps([]string{"geo", "update"}, &stdout, &stderr, cliDeps{Sys: cliTestSys{euid: 501}})
+	if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "run with sudo") {
+		t.Fatalf("geo update = (%d, %q, %q), want injected non-root refusal", code, stdout.String(), stderr.String())
 	}
 }
 

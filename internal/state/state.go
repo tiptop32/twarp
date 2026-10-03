@@ -211,35 +211,7 @@ type diskState struct {
 }
 
 func (s *Store) read() (diskState, error) {
-	data, err := os.ReadFile(s.opts.File)
-	if errors.Is(err, os.ErrNotExist) {
-		return diskState{Version: 1, CIDRs: []Entry{}}, nil
-	}
-	if err != nil {
-		return diskState{}, fmt.Errorf("read state %q: %w", s.opts.File, err)
-	}
-	var state diskState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return diskState{}, fmt.Errorf("decode state %q: %w", s.opts.File, err)
-	}
-	if state.Version != 1 {
-		return diskState{}, fmt.Errorf("decode state %q: unknown version %d", s.opts.File, state.Version)
-	}
-	if state.CIDRs == nil {
-		state.CIDRs = []Entry{}
-	}
-	for i, entry := range state.CIDRs {
-		if !entry.CIDR.IsValid() {
-			return diskState{}, fmt.Errorf("decode state %q: cidrs[%d] has invalid prefix", s.opts.File, i)
-		}
-		if entry.CIDR != entry.CIDR.Masked() {
-			return diskState{}, fmt.Errorf("decode state %q: cidrs[%d] is not masked: %s", s.opts.File, i, entry.CIDR)
-		}
-		if err := validatePrefix(entry.CIDR, nil, s.opts.CorpSocks, true); err != nil {
-			return diskState{}, fmt.Errorf("decode state %q: cidrs[%d]: %w", s.opts.File, i, err)
-		}
-	}
-	return state, nil
+	return readStateFile(s.opts.File, s.opts.CorpSocks)
 }
 
 func (s *Store) write(state diskState) error {

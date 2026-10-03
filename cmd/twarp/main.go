@@ -10,7 +10,9 @@ import (
 	"os"
 
 	"github.com/tiptop32/twarp/internal/config"
+	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/singbox"
+	"github.com/tiptop32/twarp/internal/sysexec"
 )
 
 // command is one twarp subcommand.
@@ -37,17 +39,23 @@ func main() {
 }
 
 type cliDeps struct {
-	Sys    config.Sys
-	Stdin  io.Reader
-	Random io.Reader
-	Clash  func(config.Config, config.Secrets) func() bool
+	Sys        config.Sys
+	Stdin      io.Reader
+	Random     io.Reader
+	Clash      func(config.Config, config.Secrets) func() bool
+	Runner     sysexec.Runner
+	FS         launchd.FS
+	Executable func() (string, error)
 }
 
 func defaultCLIDeps() cliDeps {
 	return cliDeps{
-		Sys:    config.OSSys{},
-		Stdin:  os.Stdin,
-		Random: rand.Reader,
+		Sys:        config.OSSys{},
+		Stdin:      os.Stdin,
+		Random:     rand.Reader,
+		Runner:     sysexec.ExecRunner{},
+		FS:         launchd.OSFS{},
+		Executable: os.Executable,
 		Clash: func(cfg config.Config, secrets config.Secrets) func() bool {
 			return singbox.Clash{Addr: cfg.ClashAPI, Secret: secrets.ClashSecret}.RunningFunc()
 		},
@@ -72,10 +80,18 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runMigrate(args[1:], stdout, stderr)
 	case "import":
 		return runImport(args[1:], stdout, stderr, deps)
+	case "render":
+		return runRender(args[1:], stdout, stderr, deps)
+	case "apply":
+		return runApply(args[1:], stdout, stderr, deps)
+	case "install":
+		return runInstall(args[1:], stdout, stderr, deps)
+	case "uninstall":
+		return runUninstall(args[1:], stdout, stderr, deps)
 	case "corp-ip":
 		return runCorpIP(args[1:], stdout, stderr, deps)
 	case "geo":
-		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: config.OSSys{}})
+		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: deps.Sys})
 	}
 	for _, c := range commands {
 		if c.name == args[0] {
