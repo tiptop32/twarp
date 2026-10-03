@@ -23,7 +23,9 @@ make install          # сборка и установка в /usr/local/bin (с
 mkdir -p ~/.config/twarp && $EDITOR ~/.config/twarp/twarp.yaml   # по примеру из раздела «Конфигурация»
 twarp import < key.txt
 twarp gateway add 100.64.10.0/24 --comment "dev network"
-sudo twarp install
+sudo twarp install    # один раз; дальше включение и выключение:
+sudo twarp stop       # выключить туннель
+sudo twarp start      # включить снова
 twarp status
 ```
 
@@ -71,6 +73,8 @@ log_level: warn
 | `twarp render [--out DIR]` | Вывести замаскированный `config.json` или записать полный конфиг и `rules/gateway-ip.json` в `DIR`. |
 | `sudo twarp apply` | Перегенерировать конфиг, проверить его через sing-box и перезагрузить или запустить демон. |
 | `sudo twarp install` | Установить sing-box и geo launchd-демоны, rule-set'ы и ротацию логов. |
+| `sudo twarp start` | Включить туннель: загрузить установленный демон или перезапустить упавший. Откажет, если маршрут держит другой VPN. |
+| `sudo twarp stop` | Выключить туннель, оставив всё установленным; маршрут возвращается к сети. |
 | `sudo twarp uninstall` | Остановить и удалить launchd-демоны, plist и настройку ротации. Конфиги и правила сохраняются. |
 | `twarp gateway add <cidr> [--comment text] [--force]` | Добавить CIDR шлюза. `--force` снимает только проверку `allowed_ranges` и доступен только в CLI. Не запускать под sudo. |
 | `twarp gateway rm <cidr>` | Удалить CIDR шлюза. |

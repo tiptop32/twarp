@@ -31,6 +31,8 @@ var commands = []command{
 	{"apply", "render, check and hot-reload sing-box"},
 	{"install", "install the sing-box launchd daemon"},
 	{"uninstall", "remove the sing-box launchd daemon"},
+	{"start", "turn the tunnel on (sudo)"},
+	{"stop", "turn the tunnel off, keep it installed (sudo)"},
 	{"gateway", "manage gateway CIDRs"},
 	{"geo", "update geoip/geosite rule-sets"},
 	{"status", "show daemon and routing status"},
@@ -101,6 +103,10 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runApply(args[1:], stdout, stderr, deps)
 	case "install":
 		return runInstall(args[1:], stdout, stderr, deps)
+	case "start":
+		return runStart(args[1:], stdout, stderr, deps)
+	case "stop":
+		return runStop(args[1:], stdout, stderr, deps)
 	case "uninstall":
 		return runUninstall(args[1:], stdout, stderr, deps)
 	case "gateway":
