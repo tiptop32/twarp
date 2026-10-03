@@ -1,0 +1,18 @@
+tunnel:
+  name: utun11
+  ip: 192.255.255.1
+protocols:
+  - socks5:
+      host: 192.168.0.105:8080
+      domains: [x5.ru, express.ms, ktalk.ru, ktalk.host, rutube.ru, lemanapro.ru]
+      dns: [100.64.70.28, 192.168.39.45]
+      ips:
+        - 100.66.84.182/32
+        - 100.66.83.242/32
+        - 100.66.83.108/32
+        - 100.126.7.247/32
+        - 100.66.64.12/32
+        - 100.66.64.13/32
+        - 100.66.65.149/24
+        - 100.65.33.160/24
+exclude_domains: [e.mail.ru, home.arpa]

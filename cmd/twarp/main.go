@@ -42,6 +42,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "-help", "--help":
 		usage(stdout)
 		return 0
+	case "migrate":
+		return runMigrate(args[1:], stdout, stderr)
 	}
 	for _, c := range commands {
 		if c.name == args[0] {

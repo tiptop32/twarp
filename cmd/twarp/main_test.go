@@ -39,7 +39,7 @@ func TestRunUsage(t *testing.T) {
 }
 
 func TestRunStubs(t *testing.T) {
-	names := []string{"migrate", "import", "render", "apply", "install", "uninstall", "corp-ip", "geo", "status", "mcp"}
+	names := []string{"import", "render", "apply", "install", "uninstall", "corp-ip", "geo", "status", "mcp"}
 	for _, name := range names {
 		var stdout, stderr bytes.Buffer
 		if code := run([]string{name}, &stdout, &stderr); code != 1 {
