@@ -40,20 +40,6 @@ func TestRunUsage(t *testing.T) {
 	}
 }
 
-func TestRunStubs(t *testing.T) {
-	names := []string{"mcp"}
-	for _, name := range names {
-		var stdout, stderr bytes.Buffer
-		if code := run([]string{name}, &stdout, &stderr); code != 1 {
-			t.Errorf("%s: exit code = %d, want 1", name, code)
-		}
-		want := "twarp " + name + ": not implemented"
-		if !strings.Contains(stderr.String(), want) {
-			t.Errorf("%s: stderr = %q, want %q", name, stderr.String(), want)
-		}
-	}
-}
-
 func TestRunWithDepsDispatchesGeoUsingInjectedSystem(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runWithDeps([]string{"geo", "update"}, &stdout, &stderr, cliDeps{Sys: cliTestSys{euid: 501}})

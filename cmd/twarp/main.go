@@ -43,17 +43,18 @@ func main() {
 }
 
 type cliDeps struct {
-	Sys        config.Sys
-	Stdin      io.Reader
-	Random     io.Reader
-	Clash      func(config.Config, config.Secrets) func() bool
-	Runner     sysexec.Runner
-	FS         launchd.FS
-	Executable func() (string, error)
-	Dial       func(context.Context, string, string) (net.Conn, error)
-	HTTPClient *http.Client
-	LookupIP   func(context.Context, string, string) ([]net.IP, error)
-	Now        func() time.Time
+	Sys          config.Sys
+	Stdin        io.Reader
+	Random       io.Reader
+	Clash        func(config.Config, config.Secrets) func() bool
+	Runner       sysexec.Runner
+	FS           launchd.FS
+	Executable   func() (string, error)
+	Dial         func(context.Context, string, string) (net.Conn, error)
+	HTTPClient   *http.Client
+	LookupIP     func(context.Context, string, string) ([]net.IP, error)
+	Now          func() time.Time
+	MCPTransport mcpTransportFactory
 }
 
 func defaultCLIDeps() cliDeps {
@@ -70,6 +71,9 @@ func defaultCLIDeps() cliDeps {
 		HTTPClient: httpClient,
 		LookupIP:   net.DefaultResolver.LookupIP,
 		Now:        time.Now,
+		MCPTransport: func(io.Reader, io.Writer) mcpTransport {
+			return stdioMCPTransport()
+		},
 		Clash: func(cfg config.Config, secrets config.Secrets) func() bool {
 			return singbox.Clash{Addr: cfg.ClashAPI, Secret: secrets.ClashSecret}.RunningFunc()
 		},
@@ -108,6 +112,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: deps.Sys})
 	case "status":
 		return runStatus(args[1:], stdout, stderr, deps)
+	case "mcp":
+		return runMCP(args[1:], stdout, stderr, deps)
 	}
 	for _, c := range commands {
 		if c.name == args[0] {

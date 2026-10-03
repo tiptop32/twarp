@@ -5,14 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/netip"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
 
-	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/state"
 )
@@ -27,64 +23,26 @@ func runGateway(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return 2
 	}
 
-	store, rulesDir, err := newGatewayStore(deps)
+	gateway, err := newGatewayStore(deps)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp gateway: %v\n", err)
 		return 1
 	}
 	switch args[0] {
 	case "add":
-		code := runGatewayAdd(store, args[1:], stdout, stderr)
-		warnNotInstalled(stderr, rulesDir, code)
+		code := runGatewayAdd(gateway.Store, args[1:], stdout, stderr)
+		warnNotInstalled(stderr, gateway.RulesDir, code)
 		return code
 	case "rm":
-		code := runGatewayRemove(store, args[1:], stdout, stderr)
-		warnNotInstalled(stderr, rulesDir, code)
+		code := runGatewayRemove(gateway.Store, args[1:], stdout, stderr)
+		warnNotInstalled(stderr, gateway.RulesDir, code)
 		return code
 	case "ls":
-		return runGatewayList(store, args[1:], stdout, stderr)
+		return runGatewayList(gateway.Store, args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "twarp gateway: unknown command %q\n", args[0])
 		return 2
 	}
-}
-
-func newGatewayStore(deps cliDeps) (*state.Store, string, error) {
-	paths, err := config.Resolve(deps.Sys)
-	if err != nil {
-		return nil, "", err
-	}
-	cfg, err := config.Load(paths.ConfigFile())
-	if err != nil {
-		return nil, "", err
-	}
-	host, _, err := net.SplitHostPort(cfg.Gateway.Socks)
-	if err != nil {
-		return nil, "", fmt.Errorf("parse gateway.socks: %w", err)
-	}
-	gatewaySocks, err := netip.ParseAddr(host)
-	if err != nil {
-		return nil, "", fmt.Errorf("gateway.socks host must be an IP address: %w", err)
-	}
-
-	var running func() bool
-	secrets, err := config.LoadSecrets(paths.SecretsFile())
-	if err == nil {
-		if deps.Clash != nil {
-			running = deps.Clash(cfg, secrets)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, "", err
-	}
-	return state.New(state.Options{
-		File:          paths.GatewayIPsFile(),
-		LockFile:      paths.LockFile(),
-		AuditFile:     paths.AuditFile(),
-		AllowedRanges: cfg.Gateway.AllowedRanges,
-		GatewaySocks:  gatewaySocks,
-		OnChange:      render.OnChangeWriter(paths.RulesDir()),
-		Running:       running,
-	}), paths.RulesDir(), nil
 }
 
 func runGatewayAdd(store *state.Store, args []string, stdout, stderr io.Writer) int {
