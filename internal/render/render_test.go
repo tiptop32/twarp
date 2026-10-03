@@ -152,12 +152,104 @@ func TestRenderRejectsMissingGeoAndInvalidInbound(t *testing.T) {
 	}
 }
 
+func TestRenderValidatesGatewaySOCKS(t *testing.T) {
+	out := t.TempDir()
+	createGeoPlaceholders(t, out)
+	tests := []struct {
+		name    string
+		address string
+		want    string
+	}{
+		{name: "hostname", address: "gw.example:1080", want: "must be an IP address"},
+		{name: "zero port", address: "192.0.2.10:0", want: "invalid port"},
+		{name: "non-numeric port", address: "192.0.2.10:not-a-port", want: "invalid port"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Gateway.Socks = test.address
+			_, err := render.Render(cfg, testSecrets(t), testPrefixes(), render.Options{
+				Paths: config.Paths{Out: out}, Inbound: render.InboundTUN,
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Render() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRenderAddsIPv6GatewayHostRoute(t *testing.T) {
+	out := t.TempDir()
+	createGeoPlaceholders(t, out)
+	cfg := testConfig()
+	cfg.Gateway.Socks = "[2001:db8::10]:1080"
+
+	data, err := render.Render(cfg, testSecrets(t), testPrefixes(), render.Options{
+		Paths: config.Paths{Out: out}, Inbound: render.InboundTUN,
+	})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	var generated singbox.Config
+	if err := json.Unmarshal(data, &generated); err != nil {
+		t.Fatalf("decode Render() output: %v", err)
+	}
+	for _, rule := range generated.Route.Rules {
+		if reflect.DeepEqual(rule.IPCIDR, []string{"2001:db8::10/128"}) && rule.Outbound == "direct" {
+			return
+		}
+	}
+	t.Fatalf("route rules = %#v, want direct IPv6 gateway host route", generated.Route.Rules)
+}
+
+func TestRenderRejectsInvalidVPNInputsWithoutLeakingURI(t *testing.T) {
+	out := t.TempDir()
+	createGeoPlaceholders(t, out)
+
+	t.Run("malformed URI", func(t *testing.T) {
+		secrets := testSecrets(t)
+		const privateMarker = "synthetic-private-marker"
+		secrets.VPNURI = "malformed-" + privateMarker
+		_, err := render.Render(testConfig(), secrets, testPrefixes(), render.Options{
+			Paths: config.Paths{Out: out}, Inbound: render.InboundTUN,
+		})
+		if err == nil || !strings.Contains(err.Error(), "parse VPN URI") {
+			t.Fatalf("Render() error = %v, want parse VPN URI", err)
+		}
+		if strings.Contains(err.Error(), privateMarker) {
+			t.Fatalf("Render() error leaked VPN URI material: %v", err)
+		}
+	})
+
+	t.Run("DNS URL without host", func(t *testing.T) {
+		cfg := testConfig()
+		cfg.VPN.DNS = "https:///dns-query"
+		_, err := render.Render(cfg, testSecrets(t), testPrefixes(), render.Options{
+			Paths: config.Paths{Out: out}, Inbound: render.InboundTUN,
+		})
+		if err == nil || !strings.Contains(err.Error(), "parse VPN DNS URL") {
+			t.Fatalf("Render() error = %v, want parse VPN DNS URL", err)
+		}
+	})
+}
+
 func TestRenderRuleSetMatchesGolden(t *testing.T) {
 	got, err := render.RenderRuleSet(testPrefixes())
 	if err != nil {
 		t.Fatalf("RenderRuleSet() error = %v", err)
 	}
 	assertGolden(t, filepath.Join("testdata", "golden", "gateway-ip.json"), got)
+}
+
+func TestRenderRejectsInvalidRuleSetPrefix(t *testing.T) {
+	out := t.TempDir()
+	createGeoPlaceholders(t, out)
+	_, err := render.Render(testConfig(), testSecrets(t), []netip.Prefix{{}}, render.Options{
+		Paths: config.Paths{Out: out}, Inbound: render.InboundTUN,
+	})
+	if err == nil || !strings.Contains(err.Error(), "prefix 0 is invalid") {
+		t.Fatalf("Render() error = %v, want invalid rule-set prefix", err)
+	}
 }
 
 func TestRenderRuleSetEmptyAndSingBoxCompile(t *testing.T) {

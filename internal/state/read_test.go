@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -95,5 +96,54 @@ func TestLockSharedDoesNotCreateMissingLockFile(t *testing.T) {
 	release()
 	if _, err := os.Stat(lockFile); !os.IsNotExist(err) {
 		t.Fatalf("lock file stat err = %v, want it not to be created", err)
+	}
+}
+
+func TestLockSharedAllowsReadersAndBlocksWriterUntilRelease(t *testing.T) {
+	dir := t.TempDir()
+	opts := testOptions(dir, nil, nil, nil)
+	if err := os.WriteFile(opts.LockFile, nil, 0o600); err != nil {
+		t.Fatalf("create lock file: %v", err)
+	}
+	releaseFirst, err := LockShared(opts.LockFile)
+	if err != nil {
+		t.Fatalf("first LockShared() error = %v", err)
+	}
+	defer func() { releaseFirst() }()
+
+	type lockResult struct {
+		release func()
+		err     error
+	}
+	secondDone := make(chan lockResult, 1)
+	go func() {
+		release, err := LockShared(opts.LockFile)
+		secondDone <- lockResult{release: release, err: err}
+	}()
+	var releaseSecond func()
+	select {
+	case result := <-secondDone:
+		if result.err != nil {
+			t.Fatalf("second LockShared() error = %v", result.err)
+		}
+		releaseSecond = result.release
+	case <-time.After(time.Second):
+		t.Fatal("second LockShared() blocked behind a shared lock")
+	}
+	defer func() { releaseSecond() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	_, err = New(opts).Add(ctx, "cli", "100.64.11.1", "", false)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Add() error = %v, want context deadline exceeded while shared locks are held", err)
+	}
+
+	releaseSecond()
+	releaseSecond = func() {}
+	releaseFirst()
+	releaseFirst = func() {}
+	if _, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false); err != nil {
+		t.Fatalf("Add() after shared lock release error = %v", err)
 	}
 }
