@@ -2,6 +2,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 
 	"github.com/tiptop32/twarp/internal/config"
+	"github.com/tiptop32/twarp/internal/singbox"
 )
 
 // command is one twarp subcommand.
@@ -34,8 +36,30 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+type cliDeps struct {
+	Sys    config.Sys
+	Stdin  io.Reader
+	Random io.Reader
+	Clash  func(config.Config, config.Secrets) func() bool
+}
+
+func defaultCLIDeps() cliDeps {
+	return cliDeps{
+		Sys:    config.OSSys{},
+		Stdin:  os.Stdin,
+		Random: rand.Reader,
+		Clash: func(cfg config.Config, secrets config.Secrets) func() bool {
+			return singbox.Clash{Addr: cfg.ClashAPI, Secret: secrets.ClashSecret}.RunningFunc()
+		},
+	}
+}
+
 // run dispatches args to a subcommand and returns the process exit code.
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithDeps(args, stdout, stderr, defaultCLIDeps())
+}
+
+func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if len(args) == 0 {
 		usage(stdout)
 		return 0
@@ -46,6 +70,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "migrate":
 		return runMigrate(args[1:], stdout, stderr)
+	case "import":
+		return runImport(args[1:], stdout, stderr, deps)
+	case "corp-ip":
+		return runCorpIP(args[1:], stdout, stderr, deps)
 	case "geo":
 		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: config.OSSys{}})
 	}

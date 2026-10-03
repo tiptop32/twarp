@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"os/user"
 	"strings"
 	"testing"
 )
@@ -39,7 +41,7 @@ func TestRunUsage(t *testing.T) {
 }
 
 func TestRunStubs(t *testing.T) {
-	names := []string{"import", "render", "apply", "install", "uninstall", "corp-ip", "status", "mcp"}
+	names := []string{"render", "apply", "install", "uninstall", "status", "mcp"}
 	for _, name := range names {
 		var stdout, stderr bytes.Buffer
 		if code := run([]string{name}, &stdout, &stderr); code != 1 {
@@ -51,6 +53,21 @@ func TestRunStubs(t *testing.T) {
 		}
 	}
 }
+
+type cliTestSys struct {
+	euid int
+	env  map[string]string
+}
+
+func (system cliTestSys) Geteuid() int { return system.euid }
+
+func (system cliTestSys) Getenv(name string) string { return system.env[name] }
+
+func (cliTestSys) LookupUser(name string) (*user.User, error) {
+	return nil, user.UnknownUserError(name)
+}
+
+func (cliTestSys) Stat(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
 
 func TestRunSubcommandHelp(t *testing.T) {
 	var stdout, stderr bytes.Buffer

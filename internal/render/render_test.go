@@ -433,3 +433,15 @@ func TestRenderNeverEmitsUnconditionalRules(t *testing.T) {
 		}
 	}
 }
+
+// Before `sudo twarp install` the rules directory does not exist and its root-
+// owned parent cannot be created by the user; install renders the rule-set.
+func TestOnChangeWriterSkipsWhenNotInstalled(t *testing.T) {
+	rulesDir := filepath.Join(t.TempDir(), "not-installed", "rules")
+	if err := render.OnChangeWriter(rulesDir)(testPrefixes()); err != nil {
+		t.Fatalf("OnChangeWriter() error = %v, want nil before install", err)
+	}
+	if _, err := os.Stat(rulesDir); !os.IsNotExist(err) {
+		t.Fatalf("rules dir stat err = %v, want it not to be created", err)
+	}
+}

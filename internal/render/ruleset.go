@@ -46,11 +46,24 @@ func WriteRuleSet(dir string, prefixes []netip.Prefix) error {
 	return nil
 }
 
-// OnChangeWriter adapts WriteRuleSet to state.Options.OnChange.
+// OnChangeWriter adapts WriteRuleSet to state.Options.OnChange. Before
+// `sudo twarp install` the rules directory does not exist and its root-owned
+// parent cannot be created by the user, so the write is skipped: install
+// renders the rule-set from the saved state. Callers detect this with
+// Installed and tell the user.
 func OnChangeWriter(rulesDir string) func([]netip.Prefix) error {
 	return func(prefixes []netip.Prefix) error {
+		if !Installed(rulesDir) {
+			return nil
+		}
 		return WriteRuleSet(rulesDir, prefixes)
 	}
+}
+
+// Installed reports whether the rules directory created by install exists.
+func Installed(rulesDir string) bool {
+	info, err := os.Stat(rulesDir)
+	return err == nil && info.IsDir()
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) (returnErr error) {
