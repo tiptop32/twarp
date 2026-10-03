@@ -15,7 +15,7 @@ import (
 // runStart turns the tunnel on without reinstalling: it loads the installed
 // sing-box daemon, or restarts it when it is loaded but not routing.
 func runStart(args []string, stdout, stderr io.Writer, deps cliDeps) int {
-	if code, done := parseLifecycleArgs("start", args, stderr); done {
+	if code, done := parseNoArgs("start", args, stderr); done {
 		return code
 	}
 	if deps.Sys == nil || deps.Sys.Geteuid() != 0 {
@@ -64,7 +64,7 @@ func runStart(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 // runStop turns the tunnel off and keeps everything installed, so the default
 // route returns to the network (or to another VPN) until twarp start.
 func runStop(args []string, stdout, stderr io.Writer, deps cliDeps) int {
-	if code, done := parseLifecycleArgs("stop", args, stderr); done {
+	if code, done := parseNoArgs("stop", args, stderr); done {
 		return code
 	}
 	if deps.Sys == nil || deps.Sys.Geteuid() != 0 {
