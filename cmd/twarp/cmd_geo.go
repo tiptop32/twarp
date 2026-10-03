@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
 	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
@@ -54,11 +53,7 @@ func runGeo(args []string, stdout, stderr io.Writer, deps geoDeps) int {
 	}
 	options := deps.Options
 	options.Dir = paths.GeoDir()
-	logDir := deps.Sys.Getenv("TWARP_LOG_DIR")
-	if logDir == "" {
-		logDir = defaultRootLogDir
-	}
-	options.AuditFile = filepath.Join(logDir, "audit.jsonl")
+	options.AuditFile = rootAuditFile(deps.Sys)
 
 	report, err := geo.Update(context.Background(), options)
 	for _, file := range report.Files {

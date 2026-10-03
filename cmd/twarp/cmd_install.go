@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"path/filepath"
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/geo"
@@ -17,7 +16,7 @@ import (
 )
 
 func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
-	if code, stop := parseLifecycleArgs("install", args, stderr); stop {
+	if code, stop := parseNoArgs("install", args, stderr); stop {
 		return code
 	}
 	if deps.Sys == nil || deps.Sys.Geteuid() != 0 {
@@ -56,9 +55,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 			return render.WriteRuleSet(directory, prefixes)
 		},
 	}
-	if err := launchd.Install(context.Background(), launchd.Deps{
-		Runner: deps.Runner, Sys: deps.Sys, FS: deps.FS, Executable: deps.Executable,
-	}, options); err != nil {
+	if err := launchd.Install(context.Background(), deps.launchd(), options); err != nil {
 		return lifecycleError("install", stderr, err)
 	}
 	_, _ = fmt.Fprintln(stdout, "installed sing-box and geo launchd services")
@@ -67,7 +64,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 }
 
 func runUninstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
-	if code, stop := parseLifecycleArgs("uninstall", args, stderr); stop {
+	if code, stop := parseNoArgs("uninstall", args, stderr); stop {
 		return code
 	}
 	if deps.Sys == nil || deps.Sys.Geteuid() != 0 {
@@ -78,16 +75,16 @@ func runUninstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if err != nil {
 		return lifecycleError("uninstall", stderr, err)
 	}
-	if err := launchd.Uninstall(context.Background(), launchd.Deps{
-		Runner: deps.Runner, Sys: deps.Sys, FS: deps.FS, Executable: deps.Executable,
-	}); err != nil {
+	if err := launchd.Uninstall(context.Background(), deps.launchd()); err != nil {
 		return lifecycleError("uninstall", stderr, err)
 	}
 	_, _ = fmt.Fprintf(stdout, "uninstalled; config kept in %s, rules in %s\n", paths.Home, paths.Out)
 	return 0
 }
 
-func parseLifecycleArgs(command string, args []string, stderr io.Writer) (int, bool) {
+// parseNoArgs parses a subcommand that takes no flags or arguments. stop is
+// true when the caller must return code: after -h or a usage error.
+func parseNoArgs(command string, args []string, stderr io.Writer) (int, bool) {
 	fs := flag.NewFlagSet("twarp "+command, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	if err := fs.Parse(args); err != nil {
@@ -108,10 +105,6 @@ func lifecycleError(command string, stderr io.Writer, err error) int {
 	return 1
 }
 
-func rootAuditFile(system config.Sys) string {
-	directory := system.Getenv("TWARP_LOG_DIR")
-	if directory == "" {
-		directory = defaultRootLogDir
-	}
-	return filepath.Join(directory, "audit.jsonl")
+func (deps cliDeps) launchd() launchd.Deps {
+	return launchd.Deps{Runner: deps.Runner, Sys: deps.Sys, FS: deps.FS, Executable: deps.Executable}
 }

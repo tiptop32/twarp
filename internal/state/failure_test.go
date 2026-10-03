@@ -31,7 +31,7 @@ func TestStorePersistsStateWhenAuditCannotBeOpened(t *testing.T) {
 	})
 
 	result, err := New(opts).Add(context.Background(), "cli", "100.64.11.1", "", false)
-	if err == nil || !strings.Contains(err.Error(), "open audit") || !errors.Is(err, os.ErrPermission) {
+	if err == nil || !strings.Contains(err.Error(), "append audit") || !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("Add() error = %v, want joined audit permission error", err)
 	}
 	if result.Status != AddStatusAdded {
@@ -72,7 +72,7 @@ func TestStoreWriteFailurePreservesStateAndSkipsOnChange(t *testing.T) {
 	})
 
 	_, err := New(opts).Add(context.Background(), "cli", "100.64.11.2", "new", false)
-	if err == nil || !strings.Contains(err.Error(), "create temporary state") || !errors.Is(err, os.ErrPermission) {
+	if err == nil || !strings.Contains(err.Error(), "write state") || !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("Add() error = %v, want temporary state permission error", err)
 	}
 	if got := mustReadFile(t, opts.File); !bytes.Equal(got, original) {
@@ -81,7 +81,7 @@ func TestStoreWriteFailurePreservesStateAndSkipsOnChange(t *testing.T) {
 	if got := onChangeCalls.Load(); got != 0 {
 		t.Fatalf("OnChange calls = %d, want 0 after failed state write", got)
 	}
-	matches, globErr := filepath.Glob(filepath.Join(dir, ".gateway-ips-*.tmp"))
+	matches, globErr := filepath.Glob(filepath.Join(dir, ".gateway-ips.json.tmp-*"))
 	if globErr != nil {
 		t.Fatalf("glob temporary state files: %v", globErr)
 	}

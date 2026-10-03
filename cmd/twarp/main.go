@@ -4,8 +4,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -118,28 +116,9 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	case "mcp":
 		return runMCP(args[1:], stdout, stderr, deps)
 	}
-	for _, c := range commands {
-		if c.name == args[0] {
-			return runStub(c, args[1:], stderr)
-		}
-	}
 	_, _ = fmt.Fprintf(stderr, "twarp: unknown command %q\n\n", args[0])
 	usage(stderr)
 	return 2
-}
-
-// runStub parses common flags and reports that the command is not implemented yet.
-func runStub(c command, args []string, stderr io.Writer) int {
-	fs := flag.NewFlagSet("twarp "+c.name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
-	}
-	_, _ = fmt.Fprintf(stderr, "twarp %s: not implemented\n", c.name)
-	return 1
 }
 
 func usage(w io.Writer) {

@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 
 	"github.com/tiptop32/twarp/internal/config"
+	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
@@ -35,33 +37,8 @@ func (OSFS) Chown(path string, uid, gid int) error { return os.Chown(path, uid, 
 // WriteFile atomically replaces path with data and exactly mode. Unlike
 // os.WriteFile it never keeps the permissions of an existing file, so a
 // config.json that was once world-readable cannot stay that way.
-func (OSFS) WriteFile(path string, data []byte, mode fs.FileMode) (returnErr error) {
-	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		if returnErr != nil {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(mode); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(data); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, path)
+func (OSFS) WriteFile(path string, data []byte, mode fs.FileMode) error {
+	return fsutil.WriteFileAtomic(path, data, mode)
 }
 
 // Remove delegates to os.Remove.
@@ -152,8 +129,7 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	if err := options.WriteRuleSet(options.Paths.RulesDir()); err != nil {
 		return fmt.Errorf("write gateway rule-set: %w", err)
 	}
-	gatewayRuleSet := filepath.Join(options.Paths.RulesDir(), "gateway-ip.json")
-	if err := deps.FS.Chown(gatewayRuleSet, uid, gid); err != nil {
+	if err := deps.FS.Chown(render.RuleSetPath(options.Paths.RulesDir()), uid, gid); err != nil {
 		return fmt.Errorf("give gateway rule-set to sudo user: %w", err)
 	}
 	if err := singbox.Check(ctx, deps.Runner, options.Paths.SingBox, options.Paths.OutConfig()); err != nil {

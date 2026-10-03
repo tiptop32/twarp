@@ -2,16 +2,18 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"sort"
 	"syscall"
 	"time"
+
+	"github.com/tiptop32/twarp/internal/fsutil"
 )
 
 const defaultMaxEntries = 256
@@ -141,13 +143,7 @@ func (s *Store) Add(ctx context.Context, actor, input, comment string, force boo
 	if err := s.write(state); err != nil {
 		return AddResult{}, err
 	}
-	var changeErr error
-	if s.opts.OnChange != nil {
-		if err := s.opts.OnChange(state.prefixes()); err != nil {
-			changeErr = fmt.Errorf("state saved but OnChange failed: %w", err)
-		}
-	}
-	return s.finishAdd(lock, result, actor, input, changeErr)
+	return s.finishAdd(lock, result, actor, input, s.notifyChange(state))
 }
 
 // Remove deletes the exact normalized prefix if it is present.
@@ -179,11 +175,7 @@ func (s *Store) Remove(ctx context.Context, actor, input string) (RemoveResult, 
 		if err := s.write(state); err != nil {
 			return RemoveResult{}, err
 		}
-		if s.opts.OnChange != nil {
-			if err := s.opts.OnChange(state.prefixes()); err != nil {
-				changeErr = fmt.Errorf("state saved but OnChange failed: %w", err)
-			}
-		}
+		changeErr = s.notifyChange(state)
 		break
 	}
 	return s.finishRemove(lock, result, actor, input, changeErr)
@@ -215,38 +207,27 @@ func (s *Store) read() (diskState, error) {
 }
 
 func (s *Store) write(state diskState) error {
-	dir := filepath.Dir(s.opts.File)
-	temporary, err := os.CreateTemp(dir, ".gateway-ips-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary state for %q: %w", s.opts.File, err)
-	}
-	temporaryPath := temporary.Name()
-	removeTemporary := true
-	defer func() {
-		_ = temporary.Close()
-		if removeTemporary {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-
-	if err := temporary.Chmod(0o600); err != nil {
-		return fmt.Errorf("set temporary state permissions: %w", err)
-	}
-	encoder := json.NewEncoder(temporary)
+	var data bytes.Buffer
+	encoder := json.NewEncoder(&data)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(state); err != nil {
 		return fmt.Errorf("encode state %q: %w", s.opts.File, err)
 	}
-	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("sync state %q: %w", s.opts.File, err)
+	if err := fsutil.WriteFileAtomic(s.opts.File, data.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("write state %q: %w", s.opts.File, err)
 	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close state %q: %w", s.opts.File, err)
+	return nil
+}
+
+// notifyChange runs OnChange after a successful write. Its error does not undo
+// the write, so it is wrapped to say the state is already saved.
+func (s *Store) notifyChange(state diskState) error {
+	if s.opts.OnChange == nil {
+		return nil
 	}
-	if err := os.Rename(temporaryPath, s.opts.File); err != nil {
-		return fmt.Errorf("replace state %q: %w", s.opts.File, err)
+	if err := s.opts.OnChange(state.prefixes()); err != nil {
+		return fmt.Errorf("state saved but OnChange failed: %w", err)
 	}
-	removeTemporary = false
 	return nil
 }
 

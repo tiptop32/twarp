@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 
 	"github.com/tiptop32/twarp/internal/config"
@@ -86,28 +85,15 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 				{Type: "local", Tag: "local"},
 				{Type: "https", Tag: "remote", Server: remoteDNS.Hostname(), Path: remotePath, Detour: "vpn"},
 			},
-			Rules: []singbox.DNSRule{
-				{DomainSuffix: cfg.Gateway.Domains, Server: "gateway"},
-				{DomainSuffix: directSuffixes, Server: "direct"},
-				{RuleSet: []string{"geosite-category-ru"}, Server: "direct"},
-			},
+			Rules:          dnsRules(cfg),
 			Final:          "remote",
 			Strategy:       "prefer_ipv4",
 			ReverseMapping: true,
 		},
 		Route: singbox.Route{
-			Rules: []singbox.RouteRule{
-				{Action: "sniff"},
-				{Protocol: "dns", Action: "hijack-dns"},
-				{IPCIDR: []string{socksPrefix}, Outbound: "direct"},
-				{DomainSuffix: cfg.Gateway.Domains, Outbound: "gateway"},
-				{RuleSet: []string{"gateway-ip"}, Outbound: "gateway"},
-				{IPIsPrivate: true, Outbound: "direct"},
-				{DomainSuffix: directSuffixes, Outbound: "direct"},
-				{RuleSet: []string{"geoip-ru", "geosite-category-ru"}, Outbound: "direct"},
-			},
+			Rules: routeRules(cfg, socksPrefix),
 			RuleSets: []singbox.RuleSet{
-				{Type: "local", Tag: "gateway-ip", Format: "source", Path: filepath.Join(opts.Paths.RulesDir(), "gateway-ip.json")},
+				{Type: "local", Tag: "gateway-ip", Format: "source", Path: RuleSetPath(opts.Paths.RulesDir())},
 				{Type: "local", Tag: "geoip-ru", Format: "binary", Path: filepath.Join(opts.Paths.GeoDir(), "geoip-ru.srs")},
 				{Type: "local", Tag: "geosite-category-ru", Format: "binary", Path: filepath.Join(opts.Paths.GeoDir(), "geosite-category-ru.srs")},
 			},
@@ -121,20 +107,46 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 		}},
 	}
 
-	// A rule without conditions matches everything in sing-box, so the optional
-	// local_domains rules exist only when the list is non-empty.
-	if len(cfg.Direct.LocalDomains) > 0 {
-		generated.DNS.Rules = slices.Insert(generated.DNS.Rules, 1,
-			singbox.DNSRule{DomainSuffix: cfg.Direct.LocalDomains, Server: "local"})
-		generated.Route.Rules = slices.Insert(generated.Route.Rules, 6,
-			singbox.RouteRule{DomainSuffix: cfg.Direct.LocalDomains, Outbound: "direct"})
-	}
-
 	data, err := json.MarshalIndent(generated, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode sing-box config: %w", err)
 	}
 	return append(data, '\n'), nil
+}
+
+// dnsRules resolves gateway domains through the gateway DNS first; everything
+// unmatched falls through to the remote resolver over the vpn.
+func dnsRules(cfg config.Config) []singbox.DNSRule {
+	rules := []singbox.DNSRule{{DomainSuffix: cfg.Gateway.Domains, Server: "gateway"}}
+	// A rule without conditions matches everything in sing-box, so the optional
+	// local_domains rule exists only when the list is non-empty.
+	if len(cfg.Direct.LocalDomains) > 0 {
+		rules = append(rules, singbox.DNSRule{DomainSuffix: cfg.Direct.LocalDomains, Server: "local"})
+	}
+	return append(rules,
+		singbox.DNSRule{DomainSuffix: directSuffixes, Server: "direct"},
+		singbox.DNSRule{RuleSet: []string{"geosite-category-ru"}, Server: "direct"},
+	)
+}
+
+// routeRules keeps the gateway rules ahead of ip_is_private: gateway hosts in
+// RFC1918 ranges would otherwise go direct. Unmatched traffic goes to the vpn.
+func routeRules(cfg config.Config, socksPrefix string) []singbox.RouteRule {
+	rules := []singbox.RouteRule{
+		{Action: "sniff"},
+		{Protocol: "dns", Action: "hijack-dns"},
+		{IPCIDR: []string{socksPrefix}, Outbound: "direct"},
+		{DomainSuffix: cfg.Gateway.Domains, Outbound: "gateway"},
+		{RuleSet: []string{"gateway-ip"}, Outbound: "gateway"},
+		{IPIsPrivate: true, Outbound: "direct"},
+	}
+	if len(cfg.Direct.LocalDomains) > 0 {
+		rules = append(rules, singbox.RouteRule{DomainSuffix: cfg.Direct.LocalDomains, Outbound: "direct"})
+	}
+	return append(rules,
+		singbox.RouteRule{DomainSuffix: directSuffixes, Outbound: "direct"},
+		singbox.RouteRule{RuleSet: []string{"geoip-ru", "geosite-category-ru"}, Outbound: "direct"},
+	)
 }
 
 // WriteConfig atomically replaces a sing-box config with owner-only permissions.
