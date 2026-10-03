@@ -178,8 +178,8 @@ func TestRunStatusMissingConfigDoesNotCreateHome(t *testing.T) {
 		euid: 501,
 		env:  map[string]string{"TWARP_HOME": home, "TWARP_OUT": filepath.Join(base, "out"), "TWARP_SINGBOX": "/test/sing-box"},
 	}})
-	if code != 1 || stderr != "" || stdout != "FAIL config: run twarp migrate\n" {
-		t.Fatalf("status = (%d, %q, %q), want migrate failure", code, stdout, stderr)
+	if code != 1 || stderr != "" || stdout != "FAIL config: create ~/.config/twarp/twarp.yaml (see README)\n" {
+		t.Fatalf("status = (%d, %q, %q), want missing config failure", code, stdout, stderr)
 	}
 	if _, err := os.Stat(home); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("status created home %q: %v", home, err)

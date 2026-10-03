@@ -9,7 +9,7 @@ import (
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
 
-const conflictingVPNHint = "another VPN (Outline/warp?) holds the default route; quit it first"
+const conflictingVPNHint = "another VPN holds the default route; quit it first"
 
 // Conflict describes the interface currently holding the default route.
 type Conflict struct {

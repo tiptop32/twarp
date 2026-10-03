@@ -14,19 +14,20 @@ sing-box устанавливается отдельно через Homebrew. `t
 
 Остановите прежний VPN-клиент перед установкой. Боевой VLESS URI передавайте только через stdin.
 
-Бинарь ставится в `/usr/local/bin` с владельцем root, а не через `go install`: так его видит `sudo`, а geo-демон от root не запускает файл из каталога, куда пишет пользователь.
+`make install` ставит бинарь в `/usr/local/bin` с владельцем root, а не через `go install`: так его видит `sudo`, а geo-демон от root не запускает файл из каталога, куда пишет пользователь.
 
 ```sh
 brew install sing-box
 git clone https://github.com/tiptop32/twarp.git && cd twarp
-go build -o twarp ./cmd/twarp && sudo install -m 755 twarp /usr/local/bin/twarp
-twarp migrate
+make install          # сборка и установка в /usr/local/bin (спросит пароль sudo)
+mkdir -p ~/.config/twarp && $EDITOR ~/.config/twarp/twarp.yaml   # по примеру из раздела «Конфигурация»
 twarp import < key.txt
+twarp gateway add 100.64.10.0/24 --comment "dev network"
 sudo twarp install
 twarp status
 ```
 
-Проверьте конфигурацию шлюза после `migrate`. Если его хосты находятся в RFC1918, добавьте соответствующие CIDR в `gateway.allowed_ranges` и в список шлюза до `install`.
+Если хосты шлюза находятся в RFC1918, добавьте их подсети в `gateway.allowed_ranges`, а затем через `twarp gateway add` до `install`.
 
 После установки запустите проверку живой системы:
 
@@ -66,7 +67,6 @@ log_level: warn
 
 | Команда | Назначение |
 | --- | --- |
-| `twarp migrate [--from ~/.warp.yaml] [--force]` | Перенести старый конфиг warp. Без `--force` существующие файлы не перезаписываются. Не запускать под sudo. |
 | `twarp import` | Прочитать VLESS URI только из stdin и сохранить секреты. Пример: `twarp import < key.txt`. Не запускать под sudo. |
 | `twarp render [--out DIR]` | Вывести замаскированный `config.json` или записать полный конфиг и `rules/gateway-ip.json` в `DIR`. |
 | `sudo twarp apply` | Перегенерировать конфиг, проверить его через sing-box и перезагрузить или запустить демон. |
@@ -155,7 +155,7 @@ MCP принимает только CIDR. `gateway_ip_list` показывает
 sudo twarp uninstall
 ```
 
-Команда удаляет launchd-демоны и системные файлы интеграции, но оставляет пользовательский конфиг и правила. После неё запустите прежний VPN-клиент или warp.
+Команда удаляет launchd-демоны и системные файлы интеграции, но оставляет пользовательский конфиг и правила. После неё запустите прежний VPN-клиент.
 
 ## Модель угроз
 

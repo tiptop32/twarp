@@ -30,7 +30,7 @@ func TestDetectConflict(t *testing.T) {
 			want: launchd.Conflict{
 				Interface: "utun7",
 				Addr:      "10.8.0.2",
-				Hint:      "another VPN (Outline/warp?) holds the default route; quit it first",
+				Hint:      "another VPN holds the default route; quit it first",
 			},
 		},
 		{

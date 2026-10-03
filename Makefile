@@ -1,9 +1,20 @@
-.PHONY: build test integration eval lint secrets-check
+.PHONY: build install uninstall-bin test integration eval lint secrets-check
 
 EVAL_SCRIPT := ./evals/mcp_tool_choice/run.sh
+PREFIX ?= /usr/local
 
 build:
 	go build -o twarp ./cmd/twarp
+
+# Root-owned binary in $(PREFIX)/bin: sudo can find it, and the root geo
+# daemon never executes a user-writable file. Build runs as the user so the
+# Go cache stays in the user's home.
+install: build
+	sudo install -m 755 twarp $(PREFIX)/bin/twarp
+	@echo "installed $(PREFIX)/bin/twarp; next: sudo twarp install"
+
+uninstall-bin:
+	sudo rm -f $(PREFIX)/bin/twarp
 
 test:
 	go test ./...

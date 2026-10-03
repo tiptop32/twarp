@@ -65,7 +65,7 @@ func runStatus(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	cfg, err := config.Load(paths.ConfigFile())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			reporter.line("FAIL", "config", "run twarp migrate")
+			reporter.line("FAIL", "config", "create ~/.config/twarp/twarp.yaml (see README)")
 		} else {
 			reporter.line("FAIL", "config", err.Error())
 		}

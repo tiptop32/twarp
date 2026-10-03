@@ -26,7 +26,6 @@ type command struct {
 }
 
 var commands = []command{
-	{"migrate", "convert legacy config into twarp format"},
 	{"import", "import a VPN URI as the vpn outbound"},
 	{"render", "render sing-box config.json"},
 	{"apply", "render, check and hot-reload sing-box"},
@@ -94,8 +93,6 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	case "help", "-h", "-help", "--help":
 		usage(stdout)
 		return 0
-	case "migrate":
-		return runMigrate(args[1:], stdout, stderr)
 	case "import":
 		return runImport(args[1:], stdout, stderr, deps)
 	case "render":

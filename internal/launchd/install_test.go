@@ -120,7 +120,7 @@ func TestInstallRefusesUnsafePreconditions(t *testing.T) {
 				{Call: sysexec.Call{Name: "route", Args: []string{"-n", "get", "1.1.1.1"}}, Response: sysexec.Response{Output: fixture(t, "route-utun-outline.txt")}},
 				{Call: sysexec.Call{Name: "ifconfig", Args: []string{"utun7"}}, Response: sysexec.Response{Output: fixture(t, "ifconfig-utun-outline.txt")}},
 			},
-			wantError: "another VPN (Outline/warp?) holds the default route; quit it first",
+			wantError: "another VPN holds the default route; quit it first",
 		},
 		{
 			name:   "brew service is loaded",
