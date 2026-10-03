@@ -14,10 +14,12 @@ sing-box устанавливается отдельно через Homebrew. `t
 
 Остановите прежний VPN-клиент перед установкой. Боевой VLESS URI передавайте только через stdin.
 
+Бинарь ставится в `/usr/local/bin` с владельцем root, а не через `go install`: так его видит `sudo`, а geo-демон от root не запускает файл из каталога, куда пишет пользователь.
+
 ```sh
 brew install sing-box
 git clone https://github.com/tiptop32/twarp.git && cd twarp
-go install ./cmd/twarp
+go build -o twarp ./cmd/twarp && sudo install -m 755 twarp /usr/local/bin/twarp
 twarp migrate
 twarp import < key.txt
 sudo twarp install
