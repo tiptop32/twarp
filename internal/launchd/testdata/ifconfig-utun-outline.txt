@@ -1,0 +1,3 @@
+utun7: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380
+	inet 10.8.0.2 --> 10.8.0.2 netmask 0xffffffff
+	inet6 fe80::aede:48ff:fe00:1122%utun7 prefixlen 64 scopeid 0x1d

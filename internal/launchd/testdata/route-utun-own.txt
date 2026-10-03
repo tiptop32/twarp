@@ -1,0 +1,5 @@
+   route to: 1.1.1.1
+destination: default
+       mask: default
+  interface: utun9
+      flags: <UP,DONE,STATIC,PRCLONING,GLOBAL>
