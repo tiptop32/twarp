@@ -21,7 +21,7 @@ func TestDetectConflict(t *testing.T) {
 		config string
 		want   launchd.Conflict
 	}{
-		{name: "clean system", route: "route-en0.txt"},
+		{name: "clean system", route: "route-en0.txt", want: launchd.Conflict{Interface: "en0"}},
 		{
 			name:   "Outline owns default route",
 			route:  "route-utun-outline.txt",
@@ -47,6 +47,7 @@ func TestDetectConflict(t *testing.T) {
 		{
 			name:  "system utun interfaces without default route",
 			route: "route-en0.txt",
+			want:  launchd.Conflict{Interface: "en0"},
 		},
 	}
 

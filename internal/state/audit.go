@@ -1,11 +1,11 @@
 package state
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/netip"
-	"os"
 	"time"
+
+	"github.com/tiptop32/twarp/internal/fsutil"
 )
 
 type auditRecord struct {
@@ -18,19 +18,11 @@ type auditRecord struct {
 }
 
 func (s *Store) appendAudit(actor, operation, input, result string, prefix netip.Prefix) error {
-	file, err := os.OpenFile(s.opts.AuditFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return fmt.Errorf("open audit %q: %w", s.opts.AuditFile, err)
-	}
 	record := auditRecord{
 		TS: s.now(), Actor: actor, Op: operation, Input: input, Result: result, CIDR: prefix,
 	}
-	if err := json.NewEncoder(file).Encode(record); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("append audit %q: %w", s.opts.AuditFile, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close audit %q: %w", s.opts.AuditFile, err)
+	if err := fsutil.AppendJSONLine(s.opts.AuditFile, record); err != nil {
+		return fmt.Errorf("append audit: %w", err)
 	}
 	return nil
 }

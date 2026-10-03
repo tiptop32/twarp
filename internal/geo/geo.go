@@ -2,8 +2,8 @@
 package geo
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/tiptop32/twarp/internal/fsutil"
 )
 
 const (
@@ -107,7 +109,7 @@ type auditFile struct {
 	Size int64  `json:"size"`
 }
 
-func appendAudit(path string, now func() time.Time, report Report, updateErr error) (returnErr error) {
+func appendAudit(path string, now func() time.Time, report Report, updateErr error) error {
 	if path == "" {
 		return nil
 	}
@@ -126,117 +128,57 @@ func appendAudit(path string, now func() time.Time, report Report, updateErr err
 	if updateErr != nil {
 		result = "error: " + updateErr.Error()
 	}
-	line, err := json.Marshal(auditEntry{
-		TS:     now(),
-		Actor:  "cli",
-		Op:     "geo_update",
-		Result: result,
-		Files:  files,
-	})
-	if err != nil {
-		return fmt.Errorf("encode geo audit entry: %w", err)
-	}
-	line = append(line, '\n')
-
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return fmt.Errorf("open geo audit file %q: %w", path, err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil && returnErr == nil {
-			returnErr = fmt.Errorf("close geo audit file %q: %w", path, err)
-		}
-	}()
-	if _, err := file.Write(line); err != nil {
-		return fmt.Errorf("append geo audit file %q: %w", path, err)
+	record := auditEntry{TS: now(), Actor: "cli", Op: "geo_update", Result: result, Files: files}
+	if err := fsutil.AppendJSONLine(path, record); err != nil {
+		return fmt.Errorf("append geo audit: %w", err)
 	}
 	return nil
 }
 
-func updateOne(ctx context.Context, dir string, source Source, client *http.Client, timeout time.Duration) (result FileReport, returnErr error) {
-	requestContext, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, source.URL, nil)
+func updateOne(ctx context.Context, dir string, source Source, client *http.Client, timeout time.Duration) (FileReport, error) {
+	data, err := download(ctx, source, client, timeout)
 	if err != nil {
-		return FileReport{}, fmt.Errorf("create request for %q: %w", source.Name, err)
+		return FileReport{}, err
 	}
-	response, err := client.Do(request)
-	if err != nil {
-		return FileReport{}, fmt.Errorf("download %q: %w", source.Name, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return FileReport{}, fmt.Errorf("download %q: HTTP status %s", source.Name, response.Status)
-	}
-
-	magic := make([]byte, len(ruleSetMagic))
-	if _, err := io.ReadFull(response.Body, magic); err != nil {
-		return FileReport{}, fmt.Errorf("read rule-set magic for %q: %w", source.Name, err)
-	}
-	if string(magic) != string(ruleSetMagic) {
-		return FileReport{}, fmt.Errorf("download %q: missing SRS magic header", source.Name)
-	}
-
-	temporary, err := os.CreateTemp(dir, "."+source.Name+".tmp-*")
-	if err != nil {
-		return FileReport{}, fmt.Errorf("create temporary file for %q: %w", source.Name, err)
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		if err := os.Remove(temporaryPath); err != nil && !os.IsNotExist(err) && returnErr == nil {
-			returnErr = fmt.Errorf("remove temporary file for %q: %w", source.Name, err)
-		}
-	}()
-	if err := temporary.Chmod(0o644); err != nil {
-		_ = temporary.Close()
-		return FileReport{}, fmt.Errorf("set temporary file permissions for %q: %w", source.Name, err)
-	}
-	if _, err := temporary.Write(magic); err != nil {
-		_ = temporary.Close()
-		return FileReport{}, fmt.Errorf("write rule-set magic for %q: %w", source.Name, err)
-	}
-	remainingLimit := int64(maxRuleSetSize - len(ruleSetMagic) + 1)
-	written, err := io.Copy(temporary, io.LimitReader(response.Body, remainingLimit))
-	if err != nil {
-		_ = temporary.Close()
-		return FileReport{}, fmt.Errorf("write temporary file for %q: %w", source.Name, err)
-	}
-	if written == remainingLimit {
-		_ = temporary.Close()
-		return FileReport{}, fmt.Errorf("download %q exceeds 32 MiB limit", source.Name)
-	}
-	if err := response.Body.Close(); err != nil {
-		_ = temporary.Close()
-		return FileReport{}, fmt.Errorf("close download body for %q: %w", source.Name, err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return FileReport{}, fmt.Errorf("sync temporary file for %q: %w", source.Name, err)
-	}
-	if err := temporary.Close(); err != nil {
-		return FileReport{}, fmt.Errorf("close temporary file for %q: %w", source.Name, err)
-	}
-
 	path := filepath.Join(dir, source.Name)
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return FileReport{}, fmt.Errorf("replace rule-set %q: %w", source.Name, err)
+	if err := fsutil.WriteFileAtomic(path, data, 0o644); err != nil {
+		return FileReport{}, fmt.Errorf("store rule-set %q: %w", source.Name, err)
 	}
-	directory, err := os.Open(dir)
-	if err != nil {
-		return FileReport{}, fmt.Errorf("open geo directory %q: %w", dir, err)
-	}
-	if err := directory.Sync(); err != nil {
-		_ = directory.Close()
-		return FileReport{}, fmt.Errorf("sync geo directory %q: %w", dir, err)
-	}
-	if err := directory.Close(); err != nil {
-		return FileReport{}, fmt.Errorf("close geo directory %q: %w", dir, err)
-	}
-
 	info, err := os.Stat(path)
 	if err != nil {
 		return FileReport{}, fmt.Errorf("stat stored rule-set %q: %w", source.Name, err)
 	}
 	return FileReport{Name: source.Name, Path: path, Size: info.Size(), ModTime: info.ModTime()}, nil
+}
+
+// download fetches one rule-set into memory, bounded by maxRuleSetSize, and
+// checks the SRS magic so an HTML error page never replaces a good file.
+func download(ctx context.Context, source Source, client *http.Client, timeout time.Duration) ([]byte, error) {
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, source.URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request for %q: %w", source.Name, err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("download %q: %w", source.Name, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %q: HTTP status %s", source.Name, response.Status)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxRuleSetSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("download %q: %w", source.Name, err)
+	}
+	if len(data) > maxRuleSetSize {
+		return nil, fmt.Errorf("download %q exceeds 32 MiB limit", source.Name)
+	}
+	if !bytes.HasPrefix(data, ruleSetMagic) {
+		return nil, fmt.Errorf("download %q: missing SRS magic header", source.Name)
+	}
+	return data, nil
 }

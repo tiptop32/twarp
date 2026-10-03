@@ -13,22 +13,11 @@ import (
 // It never creates the lock or state file, so root callers cannot leave files
 // owned by root in the user's configuration directory.
 func ReadPrefixes(file, lockFile string) ([]netip.Prefix, error) {
-	lock, err := os.Open(lockFile)
-	if err == nil {
-		defer func() { _ = lock.Close() }()
-		for {
-			err = syscall.Flock(int(lock.Fd()), syscall.LOCK_SH)
-			if !errors.Is(err, syscall.EINTR) {
-				break
-			}
-		}
-		if err != nil {
-			return nil, fmt.Errorf("lock %q: %w", lockFile, err)
-		}
-		defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("open lock %q: %w", lockFile, err)
+	release, err := LockShared(lockFile)
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 
 	state, err := readStateFile(file, netip.Addr{})
 	if err != nil {

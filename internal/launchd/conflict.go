@@ -11,7 +11,8 @@ import (
 
 const conflictingVPNHint = "another VPN holds the default route; quit it first"
 
-// Conflict describes the interface currently holding the default route.
+// Conflict describes the interface currently holding the default route. Addr
+// is set only for utun interfaces, and Hint only when another tunnel owns it.
 type Conflict struct {
 	Interface string
 	Addr      string
@@ -31,14 +32,14 @@ func DetectConflict(ctx context.Context, runner sysexec.Runner) (Conflict, error
 		return Conflict{}, errors.New("inspect default route: interface is missing")
 	}
 	if !strings.HasPrefix(interfaceName, "utun") {
-		return Conflict{}, nil
+		return Conflict{Interface: interfaceName}, nil
 	}
 
 	output, err = runner.Run(ctx, "ifconfig", interfaceName)
 	if err != nil {
 		return Conflict{}, fmt.Errorf("inspect tunnel %s: %w", interfaceName, err)
 	}
-	address := inetAddress(string(output))
+	address := fieldValue(string(output), "inet")
 	if address == "" {
 		return Conflict{}, fmt.Errorf("inspect tunnel %s: IPv4 address is missing", interfaceName)
 	}
@@ -66,16 +67,6 @@ func fieldValue(output, key string) string {
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && fields[0] == key {
-			return fields[1]
-		}
-	}
-	return ""
-}
-
-func inetAddress(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "inet" {
 			return fields[1]
 		}
 	}

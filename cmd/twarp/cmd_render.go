@@ -44,7 +44,8 @@ func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return 0
 	}
 
-	data, err = setGatewayRuleSetPath(data, filepath.Join(*out, "rules", "gateway-ip.json"))
+	rulesDir := filepath.Join(*out, "rules")
+	data, err = setGatewayRuleSetPath(data, render.RuleSetPath(rulesDir))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp render: prepare output: %v\n", err)
 		return 1
@@ -54,11 +55,11 @@ func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		_, _ = fmt.Fprintf(stderr, "twarp render: %v\n", err)
 		return 1
 	}
-	if err := render.WriteRuleSet(filepath.Join(*out, "rules"), prefixes); err != nil {
+	if err := render.WriteRuleSet(rulesDir, prefixes); err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp render: %v\n", err)
 		return 1
 	}
-	_, _ = fmt.Fprintf(stdout, "rendered %s and %s\n", configPath, filepath.Join(*out, "rules", "gateway-ip.json"))
+	_, _ = fmt.Fprintf(stdout, "rendered %s and %s\n", configPath, render.RuleSetPath(rulesDir))
 	return 0
 }
 

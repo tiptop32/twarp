@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/netip"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
+	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/state"
@@ -21,17 +20,8 @@ import (
 )
 
 func runApply(args []string, stdout, stderr io.Writer, deps cliDeps) int {
-	fs := flag.NewFlagSet("twarp apply", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
-	}
-	if fs.NArg() != 0 {
-		_, _ = fmt.Fprintf(stderr, "twarp apply: unexpected arguments: %v\n", fs.Args())
-		return 2
+	if code, stop := parseNoArgs("apply", args, stderr); stop {
+		return code
 	}
 	if deps.Sys == nil || deps.Sys.Geteuid() != 0 {
 		_, _ = fmt.Fprintln(stderr, "twarp apply: run with sudo")
@@ -99,8 +89,7 @@ func writeApplyFiles(deps cliDeps, paths config.Paths, prefixes []netip.Prefix, 
 	if err := render.WriteRuleSet(paths.RulesDir(), prefixes); err != nil {
 		return err
 	}
-	ruleSet := filepath.Join(paths.RulesDir(), "gateway-ip.json")
-	if err := deps.FS.Chown(ruleSet, uid, gid); err != nil {
+	if err := deps.FS.Chown(render.RuleSetPath(paths.RulesDir()), uid, gid); err != nil {
 		return fmt.Errorf("give gateway rule-set to sudo user: %w", err)
 	}
 	return nil
@@ -113,16 +102,9 @@ func failApply(stderr io.Writer, system config.Sys, err error) int {
 }
 
 func appendCLIAudit(system config.Sys, operation, result string) error {
-	directory := system.Getenv("TWARP_LOG_DIR")
-	if directory == "" {
-		directory = defaultRootLogDir
-	}
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return fmt.Errorf("create audit directory %q: %w", directory, err)
-	}
-	file, err := os.OpenFile(filepath.Join(directory, "audit.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return fmt.Errorf("open audit log: %w", err)
+	path := rootAuditFile(system)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create audit directory %q: %w", filepath.Dir(path), err)
 	}
 	record := struct {
 		TS     time.Time `json:"ts"`
@@ -130,12 +112,18 @@ func appendCLIAudit(system config.Sys, operation, result string) error {
 		Op     string    `json:"op"`
 		Result string    `json:"result"`
 	}{TS: time.Now().UTC(), Actor: "cli", Op: operation, Result: result}
-	if err := json.NewEncoder(file).Encode(record); err != nil {
-		_ = file.Close()
+	if err := fsutil.AppendJSONLine(path, record); err != nil {
 		return fmt.Errorf("append audit log: %w", err)
 	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close audit log: %w", err)
-	}
 	return nil
+}
+
+// rootAuditFile is the audit log written by root commands; user commands write
+// to the audit log in the twarp home instead.
+func rootAuditFile(system config.Sys) string {
+	directory := system.Getenv("TWARP_LOG_DIR")
+	if directory == "" {
+		directory = defaultRootLogDir
+	}
+	return filepath.Join(directory, "audit.jsonl")
 }

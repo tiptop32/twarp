@@ -129,26 +129,12 @@ func checkGateway(reporter *statusReporter, address string, dial func(context.Co
 	reporter.line("OK", "gateway", address+" is reachable")
 }
 
-type recordingRunner struct {
-	sysexec.Runner
-	routeOutput string
-}
-
-func (runner *recordingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	output, err := runner.Runner.Run(ctx, name, args...)
-	if name == "route" && err == nil {
-		runner.routeOutput = string(output)
-	}
-	return output, err
-}
-
 func checkTunnel(reporter *statusReporter, runner sysexec.Runner) {
 	if runner == nil {
 		reporter.line("FAIL", "tunnel", "system command runner is unavailable")
 		return
 	}
-	recording := &recordingRunner{Runner: runner}
-	conflict, err := launchd.DetectConflict(context.Background(), recording)
+	conflict, err := launchd.DetectConflict(context.Background(), runner)
 	if err != nil {
 		reporter.line("FAIL", "tunnel", err.Error())
 		return
@@ -159,18 +145,8 @@ func checkTunnel(reporter *statusReporter, runner sysexec.Runner) {
 	case conflict.Hint != "":
 		reporter.line("FAIL", "tunnel", fmt.Sprintf("%s %s: %s", conflict.Interface, conflict.Addr, conflict.Hint))
 	default:
-		reporter.line("WARN", "tunnel", fmt.Sprintf("default route via %s: twarp tunnel is not active", routeInterface(recording.routeOutput)))
+		reporter.line("WARN", "tunnel", fmt.Sprintf("default route via %s: twarp tunnel is not active", conflict.Interface))
 	}
-}
-
-func routeInterface(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == "interface:" {
-			return fields[1]
-		}
-	}
-	return "unknown interface"
 }
 
 func checkGatewayCIDRs(reporter *statusReporter, paths config.Paths) {

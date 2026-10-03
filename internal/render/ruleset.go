@@ -2,12 +2,12 @@ package render
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
 
+	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/singbox"
 )
 
@@ -33,13 +33,19 @@ func RenderRuleSet(prefixes []netip.Prefix) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
+// RuleSetFile is the gateway rule-set file name inside the rules directory.
+const RuleSetFile = "gateway-ip.json"
+
+// RuleSetPath returns the gateway rule-set path inside rulesDir.
+func RuleSetPath(rulesDir string) string { return filepath.Join(rulesDir, RuleSetFile) }
+
 // WriteRuleSet atomically replaces rules/gateway-ip.json with world-readable data.
 func WriteRuleSet(dir string, prefixes []netip.Prefix) error {
 	data, err := RenderRuleSet(prefixes)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "gateway-ip.json")
+	path := RuleSetPath(dir)
 	if err := writeAtomic(path, data, 0o644); err != nil {
 		return fmt.Errorf("write rule-set %q: %w", path, err)
 	}
@@ -66,48 +72,10 @@ func Installed(rulesDir string) bool {
 	return err == nil && info.IsDir()
 }
 
-func writeAtomic(path string, data []byte, mode os.FileMode) (returnErr error) {
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create directory %q: %w", dir, err)
 	}
-	temporary, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temporary file: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		if err := os.Remove(temporaryPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			returnErr = errors.Join(returnErr, fmt.Errorf("remove temporary file: %w", err))
-		}
-	}()
-
-	if err := temporary.Chmod(mode); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("set temporary file permissions: %w", err)
-	}
-	if _, err := temporary.Write(data); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("write temporary file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("sync temporary file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary file: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace destination: %w", err)
-	}
-	directory, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open destination directory: %w", err)
-	}
-	syncErr := directory.Sync()
-	closeErr := directory.Close()
-	if err := errors.Join(syncErr, closeErr); err != nil {
-		return fmt.Errorf("sync destination directory: %w", err)
-	}
-	return nil
+	return fsutil.WriteFileAtomic(path, data, mode)
 }

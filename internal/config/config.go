@@ -9,12 +9,13 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/net/idna"
+
+	"github.com/tiptop32/twarp/internal/fsutil"
 )
 
 const (
@@ -139,36 +140,13 @@ func LoadSecrets(path string) (Secrets, error) {
 }
 
 // SaveSecrets atomically writes secrets.yaml with owner-only permissions.
-func SaveSecrets(path string, secrets Secrets) (returnErr error) {
-	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+".tmp-*")
+func SaveSecrets(path string, secrets Secrets) error {
+	data, err := yaml.Marshal(secrets)
 	if err != nil {
-		return fmt.Errorf("create temporary secrets file for %q: %w", path, err)
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		if err := os.Remove(temporaryPath); err != nil && !errors.Is(err, os.ErrNotExist) && returnErr == nil {
-			returnErr = fmt.Errorf("remove temporary secrets file for %q: %w", path, err)
-		}
-	}()
-
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("set temporary secrets permissions for %q: %w", path, err)
-	}
-	if err := yaml.NewEncoder(temporary).Encode(secrets); err != nil {
-		_ = temporary.Close()
 		return fmt.Errorf("encode secrets for %q: %w", path, err)
 	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("sync temporary secrets file for %q: %w", path, err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary secrets file for %q: %w", path, err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace secrets file %q: %w", path, err)
+	if err := fsutil.WriteFileAtomic(path, data, 0o600); err != nil {
+		return fmt.Errorf("write secrets %q: %w", path, err)
 	}
 	return nil
 }
