@@ -19,7 +19,7 @@ eval:
 	$(EVAL_SCRIPT)
 
 lint:
-	golangci-lint run ./...
+	golangci-lint run --build-tags integration ./...
 	shellcheck .githooks/pre-commit
 
 # Scan both committed history and the working tree: the pre-commit hook runs

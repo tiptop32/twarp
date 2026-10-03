@@ -1,0 +1,49 @@
+{
+  "log": {
+    "level": "debug",
+    "timestamp": false
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": {{MIXED_PORT}}
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "socks",
+      "tag": "corp",
+      "server": "127.0.0.1",
+      "server_port": {{SOCKS_PORT}}
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "rule_set": "corp-ip",
+        "outbound": "corp"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "local",
+        "tag": "corp-ip",
+        "format": "source",
+        "path": "{{RULE_SET_PATH}}"
+      }
+    ],
+    "final": "direct"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:{{CLASH_PORT}}",
+      "secret": "{{CLASH_SECRET}}"
+    }
+  }
+}
