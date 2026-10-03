@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/tiptop32/twarp/internal/config"
 )
 
 // command is one twarp subcommand.
@@ -44,6 +46,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "migrate":
 		return runMigrate(args[1:], stdout, stderr)
+	case "geo":
+		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: config.OSSys{}})
 	}
 	for _, c := range commands {
 		if c.name == args[0] {
