@@ -1,0 +1,195 @@
+{
+  "log": {
+    "level": "warn"
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "tcp",
+        "tag": "corp",
+        "server": "100.64.70.28",
+        "detour": "corp"
+      },
+      {
+        "type": "udp",
+        "tag": "direct",
+        "server": "77.88.8.8"
+      },
+      {
+        "type": "local",
+        "tag": "local"
+      },
+      {
+        "type": "https",
+        "tag": "remote",
+        "server": "1.1.1.1",
+        "path": "/custom-query",
+        "detour": "vpn"
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": [
+          "corp.example",
+          "internal.example"
+        ],
+        "server": "corp"
+      },
+      {
+        "domain_suffix": [
+          "home.arpa",
+          "lan"
+        ],
+        "server": "local"
+      },
+      {
+        "domain_suffix": [
+          "ru",
+          "su",
+          "xn--p1ai"
+        ],
+        "server": "direct"
+      },
+      {
+        "rule_set": [
+          "geosite-category-ru"
+        ],
+        "server": "direct"
+      }
+    ],
+    "final": "remote",
+    "strategy": "prefer_ipv4",
+    "reverse_mapping": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": [
+        "172.19.0.1/30",
+        "fdfe:dcba:9876::1/126"
+      ],
+      "auto_route": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "socks",
+      "tag": "corp",
+      "server": "192.0.2.10",
+      "server_port": 1080,
+      "version": "5"
+    },
+    {
+      "type": "vless",
+      "tag": "vpn",
+      "server": "vpn.example.com",
+      "server_port": 443,
+      "uuid": "11111111-2222-4333-8444-555555555555",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "edge"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9_AsrhtHHw",
+          "short_id": "0123abcd"
+        }
+      },
+      "domain_resolver": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "hijack-dns",
+        "protocol": "dns"
+      },
+      {
+        "ip_cidr": [
+          "192.0.2.10/32"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "domain_suffix": [
+          "corp.example",
+          "internal.example"
+        ],
+        "outbound": "corp"
+      },
+      {
+        "rule_set": [
+          "corp-ip"
+        ],
+        "outbound": "corp"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      },
+      {
+        "domain_suffix": [
+          "home.arpa",
+          "lan"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "domain_suffix": [
+          "ru",
+          "su",
+          "xn--p1ai"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "rule_set": [
+          "geoip-ru",
+          "geosite-category-ru"
+        ],
+        "outbound": "direct"
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "local",
+        "tag": "corp-ip",
+        "format": "source",
+        "path": "${OUT}/rules/corp-ip.json"
+      },
+      {
+        "type": "local",
+        "tag": "geoip-ru",
+        "format": "binary",
+        "path": "${OUT}/geo/geoip-ru.srs"
+      },
+      {
+        "type": "local",
+        "tag": "geosite-category-ru",
+        "format": "binary",
+        "path": "${OUT}/geo/geosite-category-ru.srs"
+      }
+    ],
+    "final": "vpn",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "direct"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "secret": "synthetic-clash-secret"
+    }
+  }
+}
