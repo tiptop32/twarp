@@ -36,6 +36,9 @@ func runStart(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	}
 	switch {
 	case conflict.OwnTUN:
+		if err := sysexec.Enable(ctx, deps.Runner, sysexec.SystemTarget()); err != nil {
+			return lifecycleError("start", stderr, err)
+		}
 		_, _ = fmt.Fprintf(stdout, "already running on %s\n", conflict.Interface)
 		return 0
 	case conflict.Hint != "":
@@ -43,13 +46,18 @@ func runStart(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	}
 
 	// A loaded service that does not hold the route has crashed or was stopped
-	// by launchd; kickstart restarts it. An unloaded one needs bootstrap.
+	// by launchd; kickstart restarts it. An unloaded one needs bootstrap. stop
+	// persists a disabled flag, so clear it first: launchd refuses kickstart
+	// for a disabled service and bootstrap of one never runs it.
 	service, printErr := deps.Runner.Run(ctx, "launchctl", "print", sysexec.SystemTarget())
+	if err := sysexec.Enable(ctx, deps.Runner, sysexec.SystemTarget()); err != nil {
+		return lifecycleError("start", stderr, err)
+	}
+	if printErr == nil && strings.Contains(string(service), "state = running") {
+		_, _ = fmt.Fprintln(stdout, "sing-box is running but does not hold the default route yet; check: twarp status")
+		return 0
+	}
 	if printErr == nil {
-		if strings.Contains(string(service), "state = running") {
-			_, _ = fmt.Fprintln(stdout, "sing-box is running but does not hold the default route yet; check: twarp status")
-			return 0
-		}
 		err = sysexec.Kickstart(ctx, deps.Runner, sysexec.SystemTarget())
 	} else {
 		err = sysexec.Bootstrap(ctx, deps.Runner, "system", launchd.SingBoxPlistPath)
@@ -62,7 +70,9 @@ func runStart(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 }
 
 // runStop turns the tunnel off and keeps everything installed, so the default
-// route returns to the network (or to another VPN) until twarp start.
+// route returns to the network (or to another VPN) until twarp start. The
+// disabled flag persists across reboot, so launchd does not bring the tunnel
+// back on its own.
 func runStop(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if code, done := parseNoArgs("stop", args, stderr); done {
 		return code
@@ -71,7 +81,11 @@ func runStop(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		_, _ = fmt.Fprintln(stderr, "twarp stop: run with sudo")
 		return 1
 	}
-	if err := sysexec.Bootout(context.Background(), deps.Runner, sysexec.SystemTarget()); err != nil {
+	ctx := context.Background()
+	if err := sysexec.Bootout(ctx, deps.Runner, sysexec.SystemTarget()); err != nil {
+		return lifecycleError("stop", stderr, err)
+	}
+	if err := sysexec.Disable(ctx, deps.Runner, sysexec.SystemTarget()); err != nil {
 		return lifecycleError("stop", stderr, err)
 	}
 	_, _ = fmt.Fprintln(stdout, "stopped; start again: sudo twarp start")

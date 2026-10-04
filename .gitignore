@@ -3,6 +3,7 @@
 dist/
 *.test
 coverage.out
+/.idea/
 
 # Local secrets (VPN URIs, keys)
 secrets.yaml

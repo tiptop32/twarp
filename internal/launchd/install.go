@@ -21,6 +21,10 @@ type FS interface {
 	MkdirAll(path string, mode fs.FileMode) error
 	Chown(path string, uid, gid int) error
 	WriteFile(path string, data []byte, mode fs.FileMode) error
+	WriteFileOwned(path string, data []byte, mode fs.FileMode, uid, gid int) error
+	WriteFileCandidate(path string, data []byte, mode fs.FileMode) (string, error)
+	PromoteFile(candidatePath, path string) error
+	ReadFile(path string) ([]byte, error)
 	Remove(path string) error
 	Stat(path string) (os.FileInfo, error)
 }
@@ -41,8 +45,26 @@ func (OSFS) WriteFile(path string, data []byte, mode fs.FileMode) error {
 	return fsutil.WriteFileAtomic(path, data, mode)
 }
 
+// WriteFileOwned sets ownership on the open temporary file before replacement.
+func (OSFS) WriteFileOwned(path string, data []byte, mode fs.FileMode, uid, gid int) error {
+	return fsutil.WriteFileAtomicOwned(path, data, mode, uid, gid)
+}
+
+// WriteFileCandidate writes a synced file beside path without replacing path.
+func (OSFS) WriteFileCandidate(path string, data []byte, mode fs.FileMode) (string, error) {
+	return fsutil.WriteFileCandidate(path, data, mode)
+}
+
+// PromoteFile atomically replaces path with a validated candidate.
+func (OSFS) PromoteFile(candidatePath, path string) error {
+	return fsutil.PromoteFile(candidatePath, path)
+}
+
 // Remove delegates to os.Remove.
 func (OSFS) Remove(path string) error { return os.Remove(path) }
+
+// ReadFile delegates to os.ReadFile.
+func (OSFS) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
 // Stat delegates to os.Stat.
 func (OSFS) Stat(path string) (os.FileInfo, error) { return os.Stat(path) }
@@ -61,8 +83,9 @@ type Options struct {
 	Config       config.Config
 	Secrets      config.Secrets
 	GeoUpdate    func(context.Context) error
+	LockState    func() (func(), error)
 	RenderConfig func() ([]byte, error)
-	WriteRuleSet func(dir string) error
+	WriteRuleSet func(dir string, uid, gid int) error
 }
 
 // Install validates the host, prepares sing-box files, and loads both system services.
@@ -93,6 +116,21 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	if err := CheckBrewService(ctx, deps.Runner, uid); err != nil {
 		return err
 	}
+	if deps.Executable == nil {
+		return errors.New("resolve twarp executable: dependency is unavailable")
+	}
+	executable, err := deps.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve twarp executable: %w", err)
+	}
+	singBoxPlist, err := SingBoxPlist(options.Paths)
+	if err != nil {
+		return err
+	}
+	geoPlist, err := GeoPlist(executable, options.Paths.Out)
+	if err != nil {
+		return err
+	}
 
 	for _, directory := range []string{options.Paths.RulesDir(), options.Paths.GeoDir(), logDir, workingDir} {
 		if err := deps.FS.MkdirAll(directory, 0o755); err != nil {
@@ -116,65 +154,111 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 		}
 	}
 
-	if options.RenderConfig == nil || options.WriteRuleSet == nil {
+	if options.LockState == nil || options.RenderConfig == nil || options.WriteRuleSet == nil {
 		return errors.New("render operations are incomplete")
+	}
+	releaseState, err := options.LockState()
+	if err != nil {
+		return fmt.Errorf("lock gateway state: %w", err)
+	}
+	defer func() { releaseState() }()
+	ruleSetPath := render.RuleSetPath(options.Paths.RulesDir())
+	previousRuleSet, readErr := deps.FS.ReadFile(ruleSetPath)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return fmt.Errorf("read installed gateway rule-set: %w", readErr)
+	}
+	previousConfig, configReadErr := deps.FS.ReadFile(options.Paths.OutConfig())
+	if configReadErr != nil && !errors.Is(configReadErr, os.ErrNotExist) {
+		return fmt.Errorf("read installed sing-box config: %w", configReadErr)
+	}
+	restoreRuleSet := func(cause error) error {
+		var restoreErr error
+		if readErr == nil {
+			restoreErr = deps.FS.WriteFileOwned(ruleSetPath, previousRuleSet, 0o644, uid, gid)
+		} else {
+			restoreErr = deps.FS.Remove(ruleSetPath)
+			if errors.Is(restoreErr, os.ErrNotExist) {
+				restoreErr = nil
+			}
+		}
+		if restoreErr != nil {
+			return errors.Join(cause, fmt.Errorf("restore gateway rule-set: %w", restoreErr))
+		}
+		return cause
+	}
+	restoreConfig := func(cause error) error {
+		var restoreErr error
+		if configReadErr == nil {
+			restoreErr = deps.FS.WriteFile(options.Paths.OutConfig(), previousConfig, 0o600)
+		} else {
+			restoreErr = deps.FS.Remove(options.Paths.OutConfig())
+			if errors.Is(restoreErr, os.ErrNotExist) {
+				restoreErr = nil
+			}
+		}
+		if restoreErr != nil {
+			return errors.Join(cause, fmt.Errorf("restore sing-box config: %w", restoreErr))
+		}
+		return cause
 	}
 	configJSON, err := options.RenderConfig()
 	if err != nil {
 		return fmt.Errorf("render sing-box config: %w", err)
 	}
-	if err := deps.FS.WriteFile(options.Paths.OutConfig(), configJSON, 0o600); err != nil {
-		return fmt.Errorf("write sing-box config: %w", err)
-	}
-	if err := options.WriteRuleSet(options.Paths.RulesDir()); err != nil {
-		return fmt.Errorf("write gateway rule-set: %w", err)
-	}
-	if err := deps.FS.Chown(render.RuleSetPath(options.Paths.RulesDir()), uid, gid); err != nil {
-		return fmt.Errorf("give gateway rule-set to sudo user: %w", err)
-	}
-	if err := singbox.Check(ctx, deps.Runner, options.Paths.SingBox, options.Paths.OutConfig()); err != nil {
-		return err
-	}
-
-	singBoxPlist, err := SingBoxPlist(options.Paths)
+	candidatePath, err := deps.FS.WriteFileCandidate(options.Paths.OutConfig(), configJSON, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("write candidate sing-box config: %w", err)
 	}
+	discardCandidate := func(cause error) error {
+		if err := deps.FS.Remove(candidatePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.Join(cause, fmt.Errorf("remove candidate sing-box config: %w", err))
+		}
+		return cause
+	}
+	if err := options.WriteRuleSet(options.Paths.RulesDir(), uid, gid); err != nil {
+		return restoreRuleSet(discardCandidate(fmt.Errorf("write gateway rule-set: %w", err)))
+	}
+	if err := singbox.Check(ctx, deps.Runner, options.Paths.SingBox, candidatePath); err != nil {
+		return restoreRuleSet(discardCandidate(err))
+	}
+	// Prepare every service file before unloading the running tunnel. A file
+	// write failure must not take down an otherwise healthy service.
 	if err := deps.FS.WriteFile(SingBoxPlistPath, singBoxPlist, 0o644); err != nil {
-		return fmt.Errorf("write sing-box plist: %w", err)
-	}
-	if err := sysexec.Bootout(ctx, deps.Runner, sysexec.SystemTarget()); err != nil {
-		return fmt.Errorf("unload existing sing-box service: %w", err)
-	}
-	if err := sysexec.Bootstrap(ctx, deps.Runner, "system", SingBoxPlistPath); err != nil {
-		return fmt.Errorf("load sing-box service: %w", err)
-	}
-
-	if deps.Executable == nil {
-		return errors.New("resolve twarp executable: dependency is unavailable")
-	}
-	executable, err := deps.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve twarp executable: %w", err)
-	}
-	geoPlist, err := GeoPlist(executable)
-	if err != nil {
-		return err
+		return restoreRuleSet(discardCandidate(fmt.Errorf("write sing-box plist: %w", err)))
 	}
 	if err := deps.FS.WriteFile(GeoPlistPath, geoPlist, 0o644); err != nil {
-		return fmt.Errorf("write geo plist: %w", err)
+		return restoreRuleSet(discardCandidate(fmt.Errorf("write geo plist: %w", err)))
 	}
+	if err := deps.FS.WriteFile(NewsyslogPath, NewsyslogConfig(), 0o644); err != nil {
+		return restoreRuleSet(discardCandidate(fmt.Errorf("write newsyslog config: %w", err)))
+	}
+	if err := deps.FS.PromoteFile(candidatePath, options.Paths.OutConfig()); err != nil {
+		return restoreConfig(restoreRuleSet(discardCandidate(fmt.Errorf("promote sing-box config: %w", err))))
+	}
+	failAfterPromotion := func(cause error) error {
+		return restoreConfig(restoreRuleSet(cause))
+	}
+	// Set up the scheduled updater first, while the active tunnel is still up.
 	geoTarget := "system/" + sysexec.GeoLabel
 	if err := sysexec.Bootout(ctx, deps.Runner, geoTarget); err != nil {
-		return fmt.Errorf("unload existing geo service: %w", err)
+		return failAfterPromotion(fmt.Errorf("unload existing geo service: %w", err))
 	}
 	if err := sysexec.Bootstrap(ctx, deps.Runner, "system", GeoPlistPath); err != nil {
-		return fmt.Errorf("load geo service: %w", err)
+		return failAfterPromotion(fmt.Errorf("load geo service: %w", err))
 	}
 
-	if err := deps.FS.WriteFile(NewsyslogPath, NewsyslogConfig(), 0o644); err != nil {
-		return fmt.Errorf("write newsyslog config: %w", err)
+	if err := sysexec.Bootout(ctx, deps.Runner, sysexec.SystemTarget()); err != nil {
+		return failAfterPromotion(fmt.Errorf("unload existing sing-box service: %w", err))
 	}
+	if err := sysexec.Enable(ctx, deps.Runner, sysexec.SystemTarget()); err != nil {
+		return failAfterPromotion(fmt.Errorf("enable sing-box service: %w", err))
+	}
+	if err := sysexec.Bootstrap(ctx, deps.Runner, "system", SingBoxPlistPath); err != nil {
+		return failAfterPromotion(fmt.Errorf("load sing-box service: %w", err))
+	}
+	releaseState()
+	releaseState = func() {}
+
 	return nil
 }
 

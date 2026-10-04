@@ -169,6 +169,10 @@ func validateConfig(raw rawConfig) (Config, error) {
 	if !validHostPort(raw.Gateway.Socks) {
 		return Config{}, errors.New("gateway.socks must be host:port with a port from 1 to 65535")
 	}
+	gatewaySocksHost, _, _ := net.SplitHostPort(raw.Gateway.Socks)
+	if _, err := netip.ParseAddr(gatewaySocksHost); err != nil {
+		return Config{}, errors.New("gateway.socks host must be an IP address")
+	}
 	if len(raw.Gateway.Domains) == 0 {
 		return Config{}, errors.New("gateway.domains is required and must not be empty")
 	}

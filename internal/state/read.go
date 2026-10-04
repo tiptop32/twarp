@@ -19,7 +19,7 @@ func ReadPrefixes(file, lockFile string) ([]netip.Prefix, error) {
 	}
 	defer release()
 
-	state, err := readStateFile(file, netip.Addr{})
+	state, err := readStateFile(file)
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +27,7 @@ func ReadPrefixes(file, lockFile string) ([]netip.Prefix, error) {
 	return state.prefixes(), nil
 }
 
-func readStateFile(file string, gatewaySocks netip.Addr) (diskState, error) {
+func readStateFile(file string) (diskState, error) {
 	data, err := os.ReadFile(file)
 	if errors.Is(err, os.ErrNotExist) {
 		return diskState{Version: 1, CIDRs: []Entry{}}, nil
@@ -52,14 +52,7 @@ func readStateFile(file string, gatewaySocks netip.Addr) (diskState, error) {
 		if entry.CIDR != entry.CIDR.Masked() {
 			return diskState{}, fmt.Errorf("decode state %q: cidrs[%d] is not masked: %s", file, i, entry.CIDR)
 		}
-		validationSocks := gatewaySocks
-		if !validationSocks.IsValid() {
-			validationSocks = netip.MustParseAddr("192.0.2.1")
-			if entry.CIDR.Addr().Is4() {
-				validationSocks = netip.MustParseAddr("2001:db8::1")
-			}
-		}
-		if err := validatePrefix(entry.CIDR, nil, validationSocks, true); err != nil {
+		if err := validatePrefixStructure(entry.CIDR); err != nil {
 			return diskState{}, fmt.Errorf("decode state %q: cidrs[%d]: %w", file, i, err)
 		}
 	}

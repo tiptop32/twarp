@@ -52,6 +52,23 @@ func WriteRuleSet(dir string, prefixes []netip.Prefix) error {
 	return nil
 }
 
+// WriteRuleSetOwned behaves like WriteRuleSet and additionally gives the new
+// rule-set to uid and gid while the temporary file is still open, before the
+// atomic rename. Root-run install and apply must use it instead of a
+// path-based Chown after WriteRuleSet: a chown of the final path follows a
+// symlink that an unprivileged user can swap into the rules directory.
+func WriteRuleSetOwned(dir string, prefixes []netip.Prefix, uid, gid int) error {
+	data, err := RenderRuleSet(prefixes)
+	if err != nil {
+		return err
+	}
+	path := RuleSetPath(dir)
+	if err := writeAtomicOwned(path, data, 0o644, uid, gid); err != nil {
+		return fmt.Errorf("write rule-set %q: %w", path, err)
+	}
+	return nil
+}
+
 // OnChangeWriter adapts WriteRuleSet to state.Options.OnChange. Before
 // `sudo twarp install` the rules directory does not exist and its root-owned
 // parent cannot be created by the user, so the write is skipped: install
@@ -78,4 +95,12 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("create directory %q: %w", dir, err)
 	}
 	return fsutil.WriteFileAtomic(path, data, mode)
+}
+
+func writeAtomicOwned(path string, data []byte, mode os.FileMode, uid, gid int) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create directory %q: %w", dir, err)
+	}
+	return fsutil.WriteFileAtomicOwned(path, data, mode, uid, gid)
 }

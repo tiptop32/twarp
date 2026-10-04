@@ -21,9 +21,13 @@ func launchdFixture(t *testing.T, name string) []byte {
 }
 
 var (
-	routeCall   = sysexec.Call{Name: "route", Args: []string{"-n", "get", "1.1.1.1"}}
-	printCall   = sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}
-	bootoutCall = sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}
+	routeCall     = sysexec.Call{Name: "route", Args: []string{"-n", "get", "1.1.1.1"}}
+	printCall     = sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}
+	bootoutCall   = sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}
+	disableCall   = sysexec.Call{Name: "launchctl", Args: []string{"disable", "system/dev.twarp.singbox"}}
+	enableCall    = sysexec.Call{Name: "launchctl", Args: []string{"enable", "system/dev.twarp.singbox"}}
+	kickstartCall = sysexec.Call{Name: "launchctl", Args: []string{"kickstart", "-k", "system/dev.twarp.singbox"}}
+	bootstrapCall = sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.SingBoxPlistPath}}
 )
 
 func TestRunStartAndStopRequireRoot(t *testing.T) {
@@ -71,7 +75,8 @@ func TestRunStartLoadsUnloadedService(t *testing.T) {
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-en0.txt")}},
 		{Call: printCall, Response: sysexec.Response{Err: errors.New("Could not find service")}},
-		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.SingBoxPlistPath}}},
+		{Call: enableCall},
+		{Call: bootstrapCall},
 	}}
 	fixture.deps.Runner = runner
 	fixture.deps.FS = &cliFakeFS{}
@@ -89,7 +94,8 @@ func TestRunStartRestartsLoadedButInactiveService(t *testing.T) {
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-en0.txt")}},
 		{Call: printCall, Response: sysexec.Response{Output: []byte("state = not running\n")}},
-		{Call: sysexec.Call{Name: "launchctl", Args: []string{"kickstart", "-k", "system/dev.twarp.singbox"}}},
+		{Call: enableCall},
+		{Call: kickstartCall},
 	}}
 	fixture.deps.Runner = runner
 	fixture.deps.FS = &cliFakeFS{}
@@ -102,11 +108,12 @@ func TestRunStartRestartsLoadedButInactiveService(t *testing.T) {
 	}
 }
 
-func TestRunStartIsNoOpWhenTunnelIsActive(t *testing.T) {
+func TestRunStartEnablesActiveTunnel(t *testing.T) {
 	fixture := newCLIRenderFixture(t, 0)
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-utun-own.txt")}},
 		{Call: sysexec.Call{Name: "ifconfig", Args: []string{"utun9"}}, Response: sysexec.Response{Output: launchdFixture(t, "ifconfig-utun-own.txt")}},
+		{Call: enableCall},
 	}}
 	fixture.deps.Runner = runner
 	fixture.deps.FS = &cliFakeFS{}
@@ -119,10 +126,33 @@ func TestRunStartIsNoOpWhenTunnelIsActive(t *testing.T) {
 	}
 }
 
-func TestRunStopUnloadsServiceIdempotently(t *testing.T) {
+func TestRunStartEnablesRunningServiceWithoutRoute(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 0)
+	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-en0.txt")}},
+		{Call: printCall, Response: sysexec.Response{Output: []byte("state = running\n")}},
+		{Call: enableCall},
+	}}
+	fixture.deps.Runner = runner
+	fixture.deps.FS = &cliFakeFS{}
+	stdout, stderr, code := runCLIForTest([]string{"start"}, fixture.deps)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "does not hold the default route yet") {
+		t.Fatalf("start = (%d, %q, %q), want running status", code, stdout, stderr)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// stop must persist a disabled flag: bootout alone lets launchd relaunch the
+// KeepAlive/RunAtLoad daemon after reboot.
+func TestRunStopPersistsDisabledStateIdempotently(t *testing.T) {
 	for _, response := range []sysexec.Response{{}, {Err: errors.New("Boot-out failed: 3: No such process")}} {
 		fixture := newCLIRenderFixture(t, 0)
-		runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{{Call: bootoutCall, Response: response}}}
+		runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+			{Call: bootoutCall, Response: response},
+			{Call: disableCall},
+		}}
 		fixture.deps.Runner = runner
 		fixture.deps.FS = &cliFakeFS{}
 		stdout, stderr, code := runCLIForTest([]string{"stop"}, fixture.deps)
@@ -132,5 +162,37 @@ func TestRunStopUnloadsServiceIdempotently(t *testing.T) {
 		if err := runner.Verify(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// start after stop must clear the persisted disabled flag before kickstart or
+// bootstrap, otherwise launchd keeps the service off.
+func TestRunStartReenablesAfterStop(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		printResp sysexec.Response
+		then      sysexec.Call
+	}{
+		{name: "booted out", printResp: sysexec.Response{Err: errors.New("Could not find service")}, then: bootstrapCall},
+		{name: "loaded but inactive", printResp: sysexec.Response{Output: []byte("state = exited\n")}, then: kickstartCall},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			fixture := newCLIRenderFixture(t, 0)
+			runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+				{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-en0.txt")}},
+				{Call: printCall, Response: scenario.printResp},
+				{Call: enableCall},
+				{Call: scenario.then},
+			}}
+			fixture.deps.Runner = runner
+			fixture.deps.FS = &cliFakeFS{}
+			stdout, stderr, code := runCLIForTest([]string{"start"}, fixture.deps)
+			if code != 0 || !strings.Contains(stdout, "started") {
+				t.Fatalf("start = (%d, %q, %q), want started", code, stdout, stderr)
+			}
+			if err := runner.Verify(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

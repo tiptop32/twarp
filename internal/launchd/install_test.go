@@ -42,6 +42,10 @@ func TestInstallPerformsSystemSetupInOrder(t *testing.T) {
 	}
 	options := launchd.Options{
 		Paths: paths,
+		LockState: func() (func(), error) {
+			operations = append(operations, fsOperation{kind: "lock-state"})
+			return func() { operations = append(operations, fsOperation{kind: "unlock-state"}) }, nil
+		},
 		GeoUpdate: func(context.Context) error {
 			operations = append(operations, fsOperation{kind: "geo-update"})
 			return nil
@@ -50,8 +54,8 @@ func TestInstallPerformsSystemSetupInOrder(t *testing.T) {
 			operations = append(operations, fsOperation{kind: "render"})
 			return []byte("generated config\n"), nil
 		},
-		WriteRuleSet: func(dir string) error {
-			operations = append(operations, fsOperation{kind: "write-rule-set", path: dir})
+		WriteRuleSet: func(dir string, uid, gid int) error {
+			operations = append(operations, fsOperation{kind: "write-rule-set", path: dir, uid: uid, gid: gid})
 			return nil
 		},
 	}
@@ -71,13 +75,17 @@ func TestInstallPerformsSystemSetupInOrder(t *testing.T) {
 		{kind: "chown", path: paths.RulesDir(), uid: 501, gid: 20},
 		{kind: "stat", path: filepath.Join(paths.GeoDir(), "geoip-ru.srs")},
 		{kind: "geo-update"},
+		{kind: "lock-state"},
+		{kind: "read", path: filepath.Join(paths.RulesDir(), "gateway-ip.json")},
+		{kind: "read", path: paths.OutConfig()},
 		{kind: "render"},
-		{kind: "write", path: paths.OutConfig(), data: "generated config\n", mode: 0o600},
-		{kind: "write-rule-set", path: paths.RulesDir()},
-		{kind: "chown", path: filepath.Join(paths.RulesDir(), "gateway-ip.json"), uid: 501, gid: 20},
+		{kind: "stage", path: paths.OutConfig() + ".candidate", data: "generated config\n", mode: 0o600},
+		{kind: "write-rule-set", path: paths.RulesDir(), uid: 501, gid: 20},
 		{kind: "write", path: launchd.SingBoxPlistPath, data: string(fixture(t, "dev.twarp.singbox.plist")), mode: 0o644},
 		{kind: "write", path: launchd.GeoPlistPath, data: string(fixture(t, "dev.twarp.geo.plist")), mode: 0o644},
 		{kind: "write", path: launchd.NewsyslogPath, data: string(fixture(t, "twarp.newsyslog.conf")), mode: 0o644},
+		{kind: "promote", path: paths.OutConfig(), data: paths.OutConfig() + ".candidate"},
+		{kind: "unlock-state"},
 	}
 	if !reflect.DeepEqual(operations, want) {
 		t.Fatalf("filesystem operations = %#v\nwant %#v", operations, want)
@@ -161,6 +169,176 @@ func TestInstallRefusesUnsafePreconditions(t *testing.T) {
 	}
 }
 
+func TestInstallFailedCheckPreservesInstalledConfigAndService(t *testing.T) {
+	t.Parallel()
+
+	paths := installPaths()
+	installed := "working config\n"
+	operations := []fsOperation{}
+	filesystem := &fakeFS{
+		operations: &operations,
+		files: map[string]storedFile{
+			paths.OutConfig(): {data: installed, mode: 0o600},
+			filepath.Join(paths.RulesDir(), "gateway-ip.json"): {data: "working rule-set\n", mode: 0o644},
+		},
+	}
+	notLoaded := errors.New("service not found")
+	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: sysexec.Call{Name: testSingBox, Args: []string{"version"}}, Response: sysexec.Response{Output: []byte("sing-box version 1.14.3\n")}},
+		{Call: sysexec.Call{Name: "route", Args: []string{"-n", "get", "1.1.1.1"}}, Response: sysexec.Response{Output: fixture(t, "route-en0.txt")}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/homebrew.mxcl.sing-box"}}, Response: sysexec.Response{Err: notLoaded}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "gui/501/homebrew.mxcl.sing-box"}}, Response: sysexec.Response{Err: notLoaded}},
+		{Call: sysexec.Call{Name: testSingBox, Args: []string{"check", "-c", paths.OutConfig() + ".candidate"}}, Response: sysexec.Response{Err: errors.New("candidate is invalid")}},
+	}}
+	err := launchd.Install(context.Background(), launchd.Deps{
+		Runner:     runner,
+		Sys:        rootSystem(),
+		FS:         filesystem,
+		Executable: func() (string, error) { return "/usr/local/bin/twarp", nil },
+	}, launchd.Options{
+		Paths:        paths,
+		LockState:    func() (func(), error) { return func() {}, nil },
+		RenderConfig: func() ([]byte, error) { return []byte("invalid replacement\n"), nil },
+		WriteRuleSet: func(dir string, uid, gid int) error {
+			return filesystem.WriteFileOwned(filepath.Join(dir, "gateway-ip.json"), []byte("replacement rule-set\n"), 0o644, uid, gid)
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "candidate is invalid") {
+		t.Fatalf("Install() error = %v, want candidate check failure", err)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if got := filesystem.files[paths.OutConfig()]; got.data != installed || got.mode != 0o600 {
+		t.Fatalf("config.json = %#v, want byte-identical installed config", got)
+	}
+	if got := filesystem.files[filepath.Join(paths.RulesDir(), "gateway-ip.json")]; got.data != "working rule-set\n" {
+		t.Fatalf("gateway rule-set after failed check = %#v, want previous content", got)
+	}
+	if _, exists := filesystem.files[paths.OutConfig()+".candidate"]; exists {
+		t.Fatal("candidate config was not removed after failed check")
+	}
+}
+
+func TestInstallFileFailureKeepsRunningServiceAndConfig(t *testing.T) {
+	t.Parallel()
+
+	paths := installPaths()
+	operations := []fsOperation{}
+	installed := storedFile{data: "working config\n", mode: 0o600}
+	filesystem := &fakeFS{
+		operations:  &operations,
+		writeErrors: map[string]error{launchd.GeoPlistPath: errors.New("disk full")},
+		files:       map[string]storedFile{paths.OutConfig(): installed},
+	}
+	runner := &sysexec.Fake{Expect: successfulInstallCalls(t)[:5]}
+	err := launchd.Install(context.Background(), launchd.Deps{
+		Runner:     runner,
+		Sys:        rootSystem(),
+		FS:         filesystem,
+		Executable: func() (string, error) { return "/usr/local/bin/twarp", nil },
+	}, launchd.Options{
+		Paths:        paths,
+		LockState:    func() (func(), error) { return func() {}, nil },
+		RenderConfig: func() ([]byte, error) { return []byte("replacement\n"), nil },
+		WriteRuleSet: func(string, int, int) error { return nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "write geo plist: disk full") {
+		t.Fatalf("Install() error = %v, want geo plist write failure", err)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if got := filesystem.files[paths.OutConfig()]; got != installed {
+		t.Fatalf("config after failed install = %#v, want %#v", got, installed)
+	}
+	if _, exists := filesystem.files[paths.OutConfig()+".candidate"]; exists {
+		t.Fatal("candidate config was not removed")
+	}
+}
+
+func TestInstallGeoServiceFailureKeepsSingBoxRunning(t *testing.T) {
+	t.Parallel()
+
+	paths := installPaths()
+	ruleSetPath := filepath.Join(paths.RulesDir(), "gateway-ip.json")
+	operations := []fsOperation{}
+	installedConfig := storedFile{data: "working config\n", mode: 0o600}
+	installedRules := storedFile{data: "working rules\n", mode: 0o644}
+	filesystem := &fakeFS{operations: &operations, files: map[string]storedFile{
+		paths.OutConfig(): installedConfig, ruleSetPath: installedRules,
+	}}
+	calls := successfulInstallCalls(t)[:7]
+	calls[6].Err = errors.New("geo bootstrap failed")
+	runner := &sysexec.Fake{Expect: calls}
+	err := launchd.Install(context.Background(), launchd.Deps{
+		Runner:     runner,
+		Sys:        rootSystem(),
+		FS:         filesystem,
+		Executable: func() (string, error) { return "/usr/local/bin/twarp", nil },
+	}, launchd.Options{
+		Paths:        paths,
+		LockState:    func() (func(), error) { return func() {}, nil },
+		RenderConfig: func() ([]byte, error) { return []byte("valid config\n"), nil },
+		WriteRuleSet: func(string, int, int) error {
+			return filesystem.WriteFileOwned(ruleSetPath, []byte("replacement rules\n"), 0o644, 501, 20)
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "load geo service: geo bootstrap failed") {
+		t.Fatalf("Install() error = %v, want geo bootstrap failure", err)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if got := filesystem.files[paths.OutConfig()]; got != installedConfig {
+		t.Errorf("config after geo failure = %#v, want %#v", got, installedConfig)
+	}
+	if got := filesystem.files[ruleSetPath]; got != installedRules {
+		t.Errorf("rule-set after geo failure = %#v, want %#v", got, installedRules)
+	}
+}
+
+func TestInstallPromoteFailureRestoresInstalledFiles(t *testing.T) {
+	t.Parallel()
+
+	paths := installPaths()
+	ruleSetPath := filepath.Join(paths.RulesDir(), "gateway-ip.json")
+	operations := []fsOperation{}
+	installedConfig := storedFile{data: "working config\n", mode: 0o600}
+	installedRules := storedFile{data: "working rules\n", mode: 0o644}
+	filesystem := &fakeFS{
+		operations: &operations,
+		promoteErr: errors.New("directory sync failed"),
+		files:      map[string]storedFile{paths.OutConfig(): installedConfig, ruleSetPath: installedRules},
+	}
+	runner := &sysexec.Fake{Expect: successfulInstallCalls(t)[:5]}
+	err := launchd.Install(context.Background(), launchd.Deps{
+		Runner:     runner,
+		Sys:        rootSystem(),
+		FS:         filesystem,
+		Executable: func() (string, error) { return "/usr/local/bin/twarp", nil },
+	}, launchd.Options{
+		Paths:        paths,
+		LockState:    func() (func(), error) { return func() {}, nil },
+		RenderConfig: func() ([]byte, error) { return []byte("replacement config\n"), nil },
+		WriteRuleSet: func(string, int, int) error {
+			return filesystem.WriteFileOwned(ruleSetPath, []byte("replacement rules\n"), 0o644, 501, 20)
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "directory sync failed") {
+		t.Fatalf("Install() error = %v, want promote failure", err)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if got := filesystem.files[paths.OutConfig()]; got != installedConfig {
+		t.Errorf("config after failed promotion = %#v, want %#v", got, installedConfig)
+	}
+	if got := filesystem.files[ruleSetPath]; got != installedRules {
+		t.Errorf("rule-set after failed promotion = %#v, want %#v", got, installedRules)
+	}
+}
+
 func TestUninstallIsIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -205,11 +383,12 @@ func successfulInstallCalls(t *testing.T) []sysexec.ExpectedCall {
 		{Call: sysexec.Call{Name: "route", Args: []string{"-n", "get", "1.1.1.1"}}, Response: sysexec.Response{Output: fixture(t, "route-en0.txt")}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/homebrew.mxcl.sing-box"}}, Response: sysexec.Response{Err: notLoaded}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "gui/501/homebrew.mxcl.sing-box"}}, Response: sysexec.Response{Err: notLoaded}},
-		{Call: sysexec.Call{Name: testSingBox, Args: []string{"check", "-c", "/usr/local/etc/twarp/config.json"}}},
-		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: absent}},
-		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.SingBoxPlistPath}}},
+		{Call: sysexec.Call{Name: testSingBox, Args: []string{"check", "-c", "/usr/local/etc/twarp/config.json.candidate"}}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.geo"}}, Response: sysexec.Response{Err: absent}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.GeoPlistPath}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: absent}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"enable", sysexec.SystemTarget()}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.SingBoxPlistPath}}},
 	}
 }
 
@@ -241,10 +420,18 @@ type fsOperation struct {
 }
 
 type fakeFS struct {
-	operations *([]fsOperation)
-	statErrors map[string]error
-	removeOnce bool
-	removed    map[string]bool
+	operations  *([]fsOperation)
+	statErrors  map[string]error
+	writeErrors map[string]error
+	promoteErr  error
+	removeOnce  bool
+	removed     map[string]bool
+	files       map[string]storedFile
+}
+
+type storedFile struct {
+	data string
+	mode fs.FileMode
 }
 
 func (filesystem *fakeFS) MkdirAll(path string, mode fs.FileMode) error {
@@ -259,11 +446,53 @@ func (filesystem *fakeFS) Chown(path string, uid, gid int) error {
 
 func (filesystem *fakeFS) WriteFile(path string, data []byte, mode fs.FileMode) error {
 	*filesystem.operations = append(*filesystem.operations, fsOperation{kind: "write", path: path, data: string(data), mode: mode})
+	if err := filesystem.writeErrors[path]; err != nil {
+		return err
+	}
+	if filesystem.files != nil {
+		filesystem.files[path] = storedFile{data: string(data), mode: mode}
+	}
 	return nil
+}
+
+func (filesystem *fakeFS) WriteFileOwned(path string, data []byte, mode fs.FileMode, uid, gid int) error {
+	*filesystem.operations = append(*filesystem.operations, fsOperation{kind: "write", path: path, data: string(data), mode: mode, uid: uid, gid: gid})
+	if filesystem.files != nil {
+		filesystem.files[path] = storedFile{data: string(data), mode: mode}
+	}
+	return nil
+}
+
+func (filesystem *fakeFS) ReadFile(path string) ([]byte, error) {
+	*filesystem.operations = append(*filesystem.operations, fsOperation{kind: "read", path: path})
+	file, ok := filesystem.files[path]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return []byte(file.data), nil
+}
+
+func (filesystem *fakeFS) WriteFileCandidate(path string, data []byte, mode fs.FileMode) (string, error) {
+	candidatePath := path + ".candidate"
+	*filesystem.operations = append(*filesystem.operations, fsOperation{kind: "stage", path: candidatePath, data: string(data), mode: mode})
+	if filesystem.files != nil {
+		filesystem.files[candidatePath] = storedFile{data: string(data), mode: mode}
+	}
+	return candidatePath, nil
+}
+
+func (filesystem *fakeFS) PromoteFile(candidatePath, path string) error {
+	*filesystem.operations = append(*filesystem.operations, fsOperation{kind: "promote", path: path, data: candidatePath})
+	if filesystem.files != nil {
+		filesystem.files[path] = filesystem.files[candidatePath]
+		delete(filesystem.files, candidatePath)
+	}
+	return filesystem.promoteErr
 }
 
 func (filesystem *fakeFS) Remove(path string) error {
 	*filesystem.operations = append(*filesystem.operations, fsOperation{kind: "remove", path: path})
+	delete(filesystem.files, path)
 	if filesystem.removeOnce && filesystem.removed[path] {
 		return os.ErrNotExist
 	}
@@ -312,5 +541,35 @@ func TestOSFSWriteFileEnforcesModeOnExistingFile(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); string(data) != "new" {
 		t.Fatalf("content = %q, want new", data)
+	}
+}
+
+func TestOSFSCandidatePromotionKeepsInstalledConfigUntilPromote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	installed := []byte("working config\n")
+	if err := os.WriteFile(path, installed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	filesystem := launchd.OSFS{}
+	candidatePath, err := filesystem.WriteFileCandidate(path, []byte("checked config\n"), 0o600)
+	if err != nil {
+		t.Fatalf("WriteFileCandidate() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(candidatePath) })
+
+	if data, err := os.ReadFile(path); err != nil || string(data) != string(installed) {
+		t.Fatalf("config before promotion = %q, error = %v, want %q", data, err, installed)
+	}
+	if info, err := os.Stat(candidatePath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("candidate mode = %v, error = %v, want 0600", info.Mode().Perm(), err)
+	}
+	if err := filesystem.PromoteFile(candidatePath, path); err != nil {
+		t.Fatalf("PromoteFile() error = %v", err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "checked config\n" {
+		t.Fatalf("promoted config = %q, error = %v, want checked config", data, err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("promoted mode = %v, error = %v, want 0600", info.Mode().Perm(), err)
 	}
 }

@@ -39,6 +39,9 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	var prefixes []netip.Prefix
 	options := launchd.Options{
 		Paths: paths, Config: cfg, Secrets: secrets,
+		LockState: func() (func(), error) {
+			return state.LockShared(paths.LockFile())
+		},
 		GeoUpdate: func(ctx context.Context) error {
 			_, err := geo.Update(ctx, geo.Options{Dir: paths.GeoDir(), AuditFile: rootAuditFile(deps.Sys)})
 			return err
@@ -51,8 +54,8 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 			}
 			return render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN})
 		},
-		WriteRuleSet: func(directory string) error {
-			return render.WriteRuleSet(directory, prefixes)
+		WriteRuleSet: func(directory string, uid, gid int) error {
+			return render.WriteRuleSetOwned(directory, prefixes, uid, gid)
 		},
 	}
 	if err := launchd.Install(context.Background(), deps.launchd(), options); err != nil {

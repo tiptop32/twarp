@@ -40,6 +40,36 @@ func Normalize(input string) (netip.Prefix, []string, error) {
 // validatePrefix applies the hard network-safety rules and the configurable
 // allowed-range policy. Force bypasses only the allowed-range policy.
 func validatePrefix(prefix netip.Prefix, allowedRanges []netip.Prefix, gatewaySocks netip.Addr, force bool) error {
+	if err := validatePrefixStructure(prefix); err != nil {
+		return err
+	}
+
+	prefix = prefix.Masked()
+	if !gatewaySocks.IsValid() {
+		return fmt.Errorf("gateway SOCKS address is not configured")
+	}
+	gatewaySocks = gatewaySocks.Unmap()
+	if prefix.Contains(gatewaySocks) {
+		return fmt.Errorf("prefix %s contains gateway SOCKS address %s", prefix, gatewaySocks)
+	}
+
+	if force {
+		return nil
+	}
+	for _, allowed := range allowedRanges {
+		if containsPrefix(allowed, prefix) {
+			return nil
+		}
+	}
+
+	values := make([]string, 0, len(allowedRanges))
+	for _, allowed := range allowedRanges {
+		values = append(values, allowed.Masked().String())
+	}
+	return fmt.Errorf("prefix %s is outside allowed ranges: %s", prefix, strings.Join(values, ", "))
+}
+
+func validatePrefixStructure(prefix netip.Prefix) error {
 	if !prefix.IsValid() {
 		return fmt.Errorf("invalid prefix")
 	}
@@ -71,29 +101,7 @@ func validatePrefix(prefix netip.Prefix, allowedRanges []netip.Prefix, gatewaySo
 	if prefix.Contains(limitedBroadcast) {
 		return fmt.Errorf("limited broadcast address is not allowed: %s", prefix)
 	}
-
-	if !gatewaySocks.IsValid() {
-		return fmt.Errorf("gateway SOCKS address is not configured")
-	}
-	gatewaySocks = gatewaySocks.Unmap()
-	if prefix.Contains(gatewaySocks) {
-		return fmt.Errorf("prefix %s contains gateway SOCKS address %s", prefix, gatewaySocks)
-	}
-
-	if force {
-		return nil
-	}
-	for _, allowed := range allowedRanges {
-		if containsPrefix(allowed, prefix) {
-			return nil
-		}
-	}
-
-	values := make([]string, 0, len(allowedRanges))
-	for _, allowed := range allowedRanges {
-		values = append(values, allowed.Masked().String())
-	}
-	return fmt.Errorf("prefix %s is outside allowed ranges: %s", prefix, strings.Join(values, ", "))
+	return nil
 }
 
 func containsPrefix(container, prefix netip.Prefix) bool {

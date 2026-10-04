@@ -24,7 +24,7 @@ mkdir -p ~/.config/twarp && $EDITOR ~/.config/twarp/twarp.yaml   # по прим
 twarp import < key.txt
 twarp gateway add 100.64.10.0/24 --comment "dev network"
 sudo twarp install    # один раз; дальше включение и выключение:
-sudo twarp stop       # выключить туннель
+sudo twarp stop       # выключить туннель и автозапуск после перезагрузки
 sudo twarp start      # включить снова
 twarp status
 ```
@@ -57,13 +57,19 @@ clash_api: 127.0.0.1:9090
 log_level: warn
 ```
 
+`gateway.socks` принимает только IP-литерал с портом, например `100.64.0.10:1080` или `[2001:db8::10]:1080`; имя хоста не поддерживается.
+
 `gateway.allowed_ranges` — список диапазонов, в которые разрешено добавлять адреса шлюза. CLI без `--force` и MCP принимают только CIDR, полностью лежащие внутри одного из этих диапазонов. MCP не умеет обходить это ограничение. Значение по умолчанию — `100.64.0.0/10`; его меняет только человек в `twarp.yaml`.
+
+`gateway.socks` принимает IP-адрес и порт; имя хоста не подходит. Для IPv6 используйте запись `[адрес]:порт`.
 
 Валидация также отклоняет loopback, link-local, multicast, broadcast, префиксы шире `/16` для IPv4 и `/48` для IPv6, а также префикс, содержащий IP SOCKS-шлюза. Максимум — 256 записей. CIDR с адресом хоста нормализуется, например `100.64.11.149/24` превращается в `100.64.11.0/24` с предупреждением.
 
 Секреты хранятся отдельно в `~/.config/twarp/secrets.yaml` с правами `0600`. Не добавляйте этот файл в git.
 
 После правки `twarp.yaml` или `secrets.yaml` примените изменения: `sudo twarp apply`. Список CIDR шлюза так применять не нужно, он перечитывается сам.
+
+`apply` и `install` проверяют временный `config.json` через `sing-box check` до замены рабочего файла. При ошибке проверки прежний конфиг и запущенный sing-box сохраняются.
 
 ## Команды
 
@@ -73,8 +79,8 @@ log_level: warn
 | `twarp render [--out DIR]` | Вывести замаскированный `config.json` или записать полный конфиг и `rules/gateway-ip.json` в `DIR`. |
 | `sudo twarp apply` | Перегенерировать конфиг, проверить его через sing-box и перезагрузить или запустить демон. |
 | `sudo twarp install` | Установить sing-box и geo launchd-демоны, rule-set'ы и ротацию логов. |
-| `sudo twarp start` | Включить туннель: загрузить установленный демон или перезапустить упавший. Откажет, если маршрут держит другой VPN. |
-| `sudo twarp stop` | Выключить туннель, оставив всё установленным; маршрут возвращается к сети. |
+| `sudo twarp start` | Включить туннель и автозапуск: загрузить установленный демон или перезапустить упавший. Откажет, если маршрут держит другой VPN. |
+| `sudo twarp stop` | Выключить туннель и автозапуск после перезагрузки, оставив всё установленным; маршрут возвращается к сети. `apply` обновит конфиг, но не запустит туннель. |
 | `sudo twarp uninstall` | Остановить и удалить launchd-демоны, plist и настройку ротации. Конфиги и правила сохраняются. |
 | `twarp gateway add <cidr> [--comment text] [--force]` | Добавить CIDR шлюза. `--force` снимает только проверку `allowed_ranges` и доступен только в CLI. Не запускать под sudo. |
 | `twarp gateway rm <cidr>` | Удалить CIDR шлюза. |
@@ -134,12 +140,15 @@ MCP принимает только CIDR. `gateway_ip_list` показывает
 | Geo rule-set'ы | `/usr/local/etc/twarp/geo/*.srs` (root) |
 | launchd | `/Library/LaunchDaemons/dev.twarp.singbox.plist`, `/Library/LaunchDaemons/dev.twarp.geo.plist` |
 | Лог sing-box | `/usr/local/var/log/twarp/sing-box.log` |
+| Логи geo updater | `/usr/local/var/log/twarp/geo-update.log`, `/usr/local/var/log/twarp/geo-update.err.log` |
 | Root-аудит | `/usr/local/var/log/twarp/audit.jsonl` |
 | Ротация логов | `/etc/newsyslog.d/twarp.conf` |
 
 `audit.jsonl` растёт без ограничения размера. Если файл стал слишком большим, удалите или заархивируйте его вручную.
 
 Для тестовых каталогов используются `TWARP_HOME`, `TWARP_OUT`, `TWARP_SINGBOX` и `TWARP_LOG_DIR`.
+
+При `install` значение `TWARP_OUT` сохраняется в plist geo-демона, чтобы его плановые обновления попадали в тот же каталог, что и конфигурация sing-box.
 
 ## Если что-то не работает
 
@@ -151,7 +160,7 @@ MCP принимает только CIDR. `gateway_ip_list` показывает
 
 **Geo-файлы отсутствуют или устарели.** Выполните `sudo twarp geo update`, затем `twarp status`. `install` скачивает geo-файлы, если их ещё нет.
 
-**Нужно увидеть диагностику.** Смотрите `/usr/local/var/log/twarp/sing-box.log` и root-аудит. Изменения списка шлюза смотрите в `~/.config/twarp/audit.jsonl`. Для общего состояния запустите `twarp status`; для проверки маршрута — `scripts/smoke.sh --gateway-host gateway.example`.
+**Нужно увидеть диагностику.** Смотрите `/usr/local/var/log/twarp/sing-box.log`, `/usr/local/var/log/twarp/geo-update.log`, `/usr/local/var/log/twarp/geo-update.err.log` и root-аудит. Изменения списка шлюза смотрите в `~/.config/twarp/audit.jsonl`. Для общего состояния запустите `twarp status`; для проверки маршрута — `scripts/smoke.sh --gateway-host gateway.example`.
 
 ## Откат
 
@@ -177,4 +186,4 @@ Geo-файлы и основной `config.json` хранятся в root-кат
 git config core.hooksPath .githooks
 ```
 
-Основные проверки описаны в `CLAUDE.md`. Проверка живой установки — `scripts/smoke.sh`; периодическая MCP-проверка — `make eval`.
+Основные проверки описаны в `CLAUDE.md`. Проверка живой установки — `scripts/smoke.sh`; периодическая MCP-проверка — `make eval`. Сценарий `make eval-launchd-geo` проверяет geo updater от root без `SUDO_USER` и требует сеть и доступ к `sudo`.

@@ -1,6 +1,7 @@
 package launchd_test
 
 import (
+	"bytes"
 	"flag"
 	"os"
 	"path/filepath"
@@ -28,11 +29,22 @@ func TestSingBoxPlistGolden(t *testing.T) {
 func TestGeoPlistGolden(t *testing.T) {
 	t.Parallel()
 
-	got, err := launchd.GeoPlist("/usr/local/bin/twarp")
+	got, err := launchd.GeoPlist("/usr/local/bin/twarp", "/usr/local/etc/twarp")
 	if err != nil {
 		t.Fatalf("GeoPlist() error = %v", err)
 	}
 	assertGolden(t, "dev.twarp.geo.plist", got)
+}
+
+func TestGeoPlistPassesCustomOutputDirectory(t *testing.T) {
+	t.Parallel()
+	got, err := launchd.GeoPlist("/usr/local/bin/twarp", "/tmp/twarp-custom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got, []byte("<key>TWARP_OUT</key>\n    <string>/tmp/twarp-custom</string>")) {
+		t.Fatalf("geo plist does not pass custom output directory: %s", got)
+	}
 }
 
 func TestNewsyslogConfigGolden(t *testing.T) {

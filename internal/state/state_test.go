@@ -117,6 +117,42 @@ func TestStoreAddRemoveList(t *testing.T) {
 	}
 }
 
+func TestStoreCanListAndRemoveCIDRContainingChangedGatewaySocks(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	seed := New(testOptions(dir, nil, nil, nil))
+	const cidr = "100.64.20.0/24"
+	if _, err := seed.Add(context.Background(), "cli", cidr, "old gateway network", false); err != nil {
+		t.Fatalf("seed Add() error = %v", err)
+	}
+
+	opts := testOptions(dir, nil, nil, nil)
+	opts.GatewaySocks = netip.MustParseAddr("100.64.20.10")
+	store := New(opts)
+
+	entries, err := store.List()
+	if err != nil {
+		t.Fatalf("List() after gateway SOCKS change error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].CIDR != netip.MustParsePrefix(cidr) {
+		t.Fatalf("List() after gateway SOCKS change = %#v, want %s", entries, cidr)
+	}
+
+	if _, err := store.Add(context.Background(), "cli", "100.64.20.10", "", false); err == nil ||
+		!strings.Contains(err.Error(), "contains gateway SOCKS address") {
+		t.Fatalf("Add() covering gateway SOCKS error = %v, want SOCKS exclusion", err)
+	}
+
+	removed, err := store.Remove(context.Background(), "cli", cidr)
+	if err != nil {
+		t.Fatalf("Remove() after gateway SOCKS change error = %v", err)
+	}
+	if removed.Status != RemoveStatusRemoved {
+		t.Fatalf("Remove() after gateway SOCKS change = %#v, want removed", removed)
+	}
+}
+
 func TestStoreListSortsByAddressThenPrefixLength(t *testing.T) {
 	t.Parallel()
 

@@ -31,6 +31,43 @@ func TestRunGeoRejectsNonRoot(t *testing.T) {
 	}
 }
 
+func TestRunGeoUpdateAsLaunchDaemonUsesTWARPOutWithoutSudoUser(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	out := filepath.Join(base, "out")
+	logDir := filepath.Join(base, "log")
+	system := geoFakeSys{
+		euid: 0,
+		env: map[string]string{
+			"TWARP_OUT":     out,
+			"TWARP_LOG_DIR": logDir,
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runGeo([]string{"update"}, &stdout, &stderr, geoDeps{
+		Sys:     system,
+		Options: geo.Options{Sources: []geo.Source{}},
+	})
+	if code != 0 {
+		t.Fatalf("runGeo(update) = %d, stderr = %q", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(out, "geo")); err != nil {
+		t.Fatalf("stat TWARP_OUT geo directory: %v", err)
+	}
+	audit, err := os.ReadFile(filepath.Join(logDir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(audit), `"op":"geo_update"`) || !strings.Contains(string(audit), `"result":"ok"`) {
+		t.Errorf("audit = %q, want successful geo_update", audit)
+	}
+}
+
 func TestRunGeoUpdateAsRootDownloadsFilesAndWritesAudit(t *testing.T) {
 	t.Parallel()
 

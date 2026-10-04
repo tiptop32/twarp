@@ -1,6 +1,7 @@
-.PHONY: build install uninstall-bin test integration eval lint secrets-check
+.PHONY: build install uninstall-bin test integration eval eval-config-deployment eval-launchd-geo lint secrets-check
 
-EVAL_SCRIPT := ./evals/mcp_tool_choice/run.sh
+GEO_EVAL_SCRIPT := ./evals/launchd_geo/run.sh
+EVAL_SCRIPTS := ./evals/config_deployment/run.sh ./evals/gateway_state_recovery/run.sh ./evals/lifecycle/run.sh ./evals/mcp_tool_choice/run.sh
 PREFIX ?= /usr/local
 
 build:
@@ -18,20 +19,33 @@ uninstall-bin:
 
 test:
 	go test ./...
+	bash scripts/test-make-eval.sh
 
 integration:
 	go test -tags integration ./...
 
 eval:
-	@if [ ! -x $(EVAL_SCRIPT) ]; then \
-		echo "eval: $(EVAL_SCRIPT) not found or not executable" >&2; \
+	@for script in $(EVAL_SCRIPTS); do \
+		if [ ! -x "$$script" ]; then \
+			echo "eval: $$script not found or not executable" >&2; \
+			exit 1; \
+		fi; \
+		"$$script" || exit 1; \
+	done
+
+eval-launchd-geo:
+	@if [ ! -x $(GEO_EVAL_SCRIPT) ]; then \
+		echo "eval: $(GEO_EVAL_SCRIPT) not found or not executable" >&2; \
 		exit 1; \
 	fi
-	$(EVAL_SCRIPT)
+	$(GEO_EVAL_SCRIPT)
+
+eval-config-deployment:
+	./evals/config_deployment/run.sh
 
 lint:
 	golangci-lint run --build-tags integration ./...
-	shellcheck .githooks/pre-commit $(EVAL_SCRIPT) scripts/smoke.sh
+	shellcheck .githooks/pre-commit $(EVAL_SCRIPTS) $(GEO_EVAL_SCRIPT) scripts/smoke.sh scripts/test-make-eval.sh
 
 # Scan both committed history and the working tree: the pre-commit hook runs
 # before the new content exists in history.

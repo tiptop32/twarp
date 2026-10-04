@@ -13,6 +13,7 @@ import (
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
+	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/state"
@@ -47,33 +48,89 @@ func runApply(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if err != nil {
 		return failApply(stderr, deps.Sys, err)
 	}
+	ruleSetPath := render.RuleSetPath(resolved.RulesDir())
+	previousRuleSet, readErr := os.ReadFile(ruleSetPath)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		release()
+		return failApply(stderr, deps.Sys, fmt.Errorf("read installed gateway rule-set: %w", readErr))
+	}
 	paths, prefixes, data, err := renderInputs(deps.Sys)
 	if err != nil {
 		release()
 		return failApply(stderr, deps.Sys, err)
 	}
-	if err := writeApplyFiles(deps, paths, prefixes, data, uid, gid); err != nil {
+	previousConfig, configReadErr := os.ReadFile(paths.OutConfig())
+	if configReadErr != nil && !errors.Is(configReadErr, os.ErrNotExist) {
+		release()
+		return failApply(stderr, deps.Sys, fmt.Errorf("read installed sing-box config: %w", configReadErr))
+	}
+	candidatePath, err := writeApplyFiles(deps, paths, prefixes, data, uid, gid)
+	if err != nil {
+		err = errors.Join(err, restoreApplyRuleSet(deps, ruleSetPath, previousRuleSet, readErr == nil, uid, gid))
 		release()
 		return failApply(stderr, deps.Sys, err)
 	}
-	release()
-	ctx := context.Background()
-	if err := singbox.Check(ctx, deps.Runner, paths.SingBox, paths.OutConfig()); err != nil {
-		return failApply(stderr, deps.Sys, err)
+	failBeforePromotion := func(cause error) int {
+		cause = discardApplyCandidate(candidatePath, cause)
+		cause = errors.Join(cause, restoreApplyRuleSet(deps, ruleSetPath, previousRuleSet, readErr == nil, uid, gid))
+		release()
+		return failApply(stderr, deps.Sys, cause)
 	}
+	ctx := context.Background()
+	if err := singbox.Check(ctx, deps.Runner, paths.SingBox, candidatePath); err != nil {
+		return failBeforePromotion(err)
+	}
+	stopped := false
 	service, err := deps.Runner.Run(ctx, "launchctl", "print", sysexec.SystemTarget())
 	if err != nil {
-		return failApply(stderr, deps.Sys, errors.New("sing-box service is not installed; run: sudo twarp install"))
+		if _, statErr := deps.FS.Stat(launchd.SingBoxPlistPath); statErr == nil {
+			disabled, disabledErr := deps.Runner.Run(ctx, "launchctl", "print-disabled", "system")
+			if disabledErr == nil && serviceDisabled(disabled) {
+				stopped = true
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return failBeforePromotion(fmt.Errorf("inspect sing-box service: %w", statErr))
+		}
+		if !stopped {
+			return failBeforePromotion(errors.New("sing-box service is not installed; run: sudo twarp install"))
+		}
+	}
+	if err := fsutil.PromoteFile(candidatePath, paths.OutConfig()); err != nil {
+		err = errors.Join(err, restoreApplyConfig(paths.OutConfig(), previousConfig, configReadErr == nil))
+		err = errors.Join(err, restoreApplyRuleSet(deps, ruleSetPath, previousRuleSet, readErr == nil, uid, gid))
+		release()
+		return failApply(stderr, deps.Sys, discardApplyCandidate(candidatePath, err))
+	}
+	if stopped {
+		release()
+		if auditErr := appendCLIAudit(deps.Sys, "apply", "stopped"); auditErr != nil {
+			_, _ = fmt.Fprintf(stderr, "twarp apply: %v\n", auditErr)
+			return 1
+		}
+		_, _ = fmt.Fprintln(stdout, "applied; sing-box stays stopped; start it: sudo twarp start")
+		return 0
+	}
+	failAfterPromotion := func(cause error, reload bool) int {
+		cause = errors.Join(cause, restoreApplyConfig(paths.OutConfig(), previousConfig, configReadErr == nil))
+		cause = errors.Join(cause, restoreApplyRuleSet(deps, ruleSetPath, previousRuleSet, readErr == nil, uid, gid))
+		if reload {
+			if err := singbox.Reload(ctx, deps.Runner); err != nil {
+				cause = errors.Join(cause, fmt.Errorf("reload restored sing-box config: %w", err))
+			}
+		}
+		release()
+		return failApply(stderr, deps.Sys, cause)
 	}
 	result := "kickstarted"
 	if strings.Contains(string(service), "state = running") {
 		if err := singbox.Reload(ctx, deps.Runner); err != nil {
-			return failApply(stderr, deps.Sys, fmt.Errorf("reload sing-box: %w", err))
+			return failAfterPromotion(fmt.Errorf("reload sing-box: %w", err), true)
 		}
 		result = "reloaded"
 	} else if err := sysexec.Kickstart(ctx, deps.Runner, sysexec.SystemTarget()); err != nil {
-		return failApply(stderr, deps.Sys, fmt.Errorf("kickstart sing-box: %w", err))
+		return failAfterPromotion(fmt.Errorf("kickstart sing-box: %w", err), false)
 	}
+	release()
 	if err := appendCLIAudit(deps.Sys, "apply", result); err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp apply: %v\n", err)
 		return 1
@@ -82,15 +139,63 @@ func runApply(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	return 0
 }
 
-func writeApplyFiles(deps cliDeps, paths config.Paths, prefixes []netip.Prefix, data []byte, uid, gid int) error {
-	if err := render.WriteConfig(paths.OutConfig(), data); err != nil {
-		return err
+func serviceDisabled(output []byte) bool {
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == `"`+sysexec.Label+`"` && fields[1] == "=>" {
+			return fields[2] == "disabled" || fields[2] == "true"
+		}
 	}
-	if err := render.WriteRuleSet(paths.RulesDir(), prefixes); err != nil {
-		return err
+	return false
+}
+
+func writeApplyFiles(deps cliDeps, paths config.Paths, prefixes []netip.Prefix, data []byte, uid, gid int) (string, error) {
+	candidatePath, err := fsutil.WriteFileCandidate(paths.OutConfig(), data, 0o600)
+	if err != nil {
+		return "", err
 	}
-	if err := deps.FS.Chown(render.RuleSetPath(paths.RulesDir()), uid, gid); err != nil {
-		return fmt.Errorf("give gateway rule-set to sudo user: %w", err)
+	if err := deps.FS.MkdirAll(paths.RulesDir(), 0o755); err != nil {
+		return "", discardApplyCandidate(candidatePath, fmt.Errorf("create rule-set directory: %w", err))
+	}
+	ruleSetData, err := render.RenderRuleSet(prefixes)
+	if err != nil {
+		return "", discardApplyCandidate(candidatePath, err)
+	}
+	if err := deps.FS.WriteFileOwned(render.RuleSetPath(paths.RulesDir()), ruleSetData, 0o644, uid, gid); err != nil {
+		return "", discardApplyCandidate(candidatePath, err)
+	}
+	return candidatePath, nil
+}
+
+func discardApplyCandidate(path string, cause error) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.Join(cause, fmt.Errorf("remove candidate config: %w", err))
+	}
+	return cause
+}
+
+func restoreApplyRuleSet(deps cliDeps, path string, previous []byte, existed bool, uid, gid int) error {
+	if existed {
+		if err := deps.FS.WriteFileOwned(path, previous, 0o644, uid, gid); err != nil {
+			return fmt.Errorf("restore gateway rule-set: %w", err)
+		}
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove new gateway rule-set: %w", err)
+	}
+	return nil
+}
+
+func restoreApplyConfig(path string, previous []byte, existed bool) error {
+	if existed {
+		if err := fsutil.WriteFileAtomic(path, previous, 0o600); err != nil {
+			return fmt.Errorf("restore sing-box config: %w", err)
+		}
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove new sing-box config: %w", err)
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tiptop32/twarp/internal/render"
@@ -70,6 +71,55 @@ func TestAtomicWritersPreserveDestinationWhenDirectoryIsReadOnly(t *testing.T) {
 				t.Fatalf("temporary files remain after failed write: %v", matches)
 			}
 		})
+	}
+}
+
+func TestWriteRuleSetOwnedGivesOwnerBeforeRename(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := render.WriteRuleSetOwned(dir, testPrefixes(), os.Getuid(), os.Getgid()); err != nil {
+		t.Fatalf("WriteRuleSetOwned() error = %v", err)
+	}
+	path := filepath.Join(dir, "gateway-ip.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rule-set: %v", err)
+	}
+	if !strings.Contains(string(data), "100.64.") {
+		t.Fatalf("rule-set = %q, want rendered prefixes", data)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat rule-set: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o644 {
+		t.Fatalf("rule-set mode = %04o, want 0644", mode)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		if got := int(stat.Uid); got != os.Getuid() {
+			t.Fatalf("rule-set owner uid = %d, want %d", got, os.Getuid())
+		}
+	}
+}
+
+// The MCP write stays unprivileged: it renders world-readable data without
+// touching ownership, exactly like before the owned writer was introduced.
+func TestWriteRuleSetStaysUnprivileged(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := render.WriteRuleSet(dir, testPrefixes()); err != nil {
+		t.Fatalf("WriteRuleSet() error = %v", err)
+	}
+	path := filepath.Join(dir, "gateway-ip.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat rule-set: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o644 {
+		t.Fatalf("rule-set mode = %04o, want 0644", mode)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != os.Getuid() {
+		t.Fatalf("rule-set owner uid = %d, want the writing user %d", stat.Uid, os.Getuid())
 	}
 }
 

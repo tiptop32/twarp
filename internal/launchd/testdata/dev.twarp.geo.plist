@@ -10,9 +10,18 @@
     <string>geo</string>
     <string>update</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TWARP_OUT</key>
+    <string>/usr/local/etc/twarp</string>
+  </dict>
   <key>StartInterval</key>
   <integer>86400</integer>
   <key>RunAtLoad</key>
   <false/>
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/twarp/geo-update.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/twarp/geo-update.err.log</string>
 </dict>
 </plist>

@@ -58,6 +58,20 @@ func TestLaunchctlHelpersUseExactArgv(t *testing.T) {
 			},
 			args: []string{"kickstart", "-k", "system/dev.twarp.singbox"},
 		},
+		{
+			name: "disable",
+			call: func(ctx context.Context, runner sysexec.Runner) error {
+				return sysexec.Disable(ctx, runner, "system/dev.twarp.singbox")
+			},
+			args: []string{"disable", "system/dev.twarp.singbox"},
+		},
+		{
+			name: "enable",
+			call: func(ctx context.Context, runner sysexec.Runner) error {
+				return sysexec.Enable(ctx, runner, "system/dev.twarp.singbox")
+			},
+			args: []string{"enable", "system/dev.twarp.singbox"},
+		},
 	}
 
 	for _, test := range tests {

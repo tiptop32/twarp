@@ -203,7 +203,7 @@ type diskState struct {
 }
 
 func (s *Store) read() (diskState, error) {
-	return readStateFile(s.opts.File, s.opts.GatewaySocks)
+	return readStateFile(s.opts.File)
 }
 
 func (s *Store) write(state diskState) error {

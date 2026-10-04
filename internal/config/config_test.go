@@ -55,7 +55,7 @@ func TestLoadReadsExplicitValuesAndCanonicalizesPrefixes(t *testing.T) {
 
 	path := writeFile(t, "twarp.yaml", 0o600, `
 gateway:
-  socks: proxy.example.com:1080
+  socks: "[2001:db8::10]:1080"
   domains: [Gateway.Example]
   dns: 2001:db8::53
   allowed_ranges: [10.7.9.4/8, 2001:db8:1::1/32]
@@ -101,6 +101,7 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 		{name: "missing socks", yaml: strings.Replace(validConfig(), "  socks: 192.168.1.10:1080\n", "", 1), wantError: "gateway.socks is required"},
 		{name: "socks without port", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1.10", 1), wantError: "gateway.socks must be host:port"},
 		{name: "socks invalid port", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1.10:70000", 1), wantError: "gateway.socks must be host:port"},
+		{name: "socks hostname", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "proxy.example.com:1080", 1), wantError: "gateway.socks host must be an IP address"},
 		{name: "missing DNS", yaml: strings.Replace(validConfig(), "  dns: 100.64.0.53\n", "", 1), wantError: "gateway.dns is required"},
 		{name: "non-IP DNS", yaml: strings.Replace(validConfig(), "100.64.0.53", "dns.example", 1), wantError: "gateway.dns must be an IP address"},
 		{name: "invalid domain", yaml: strings.Replace(validConfig(), "intra.example", "-bad.example", 1), wantError: "gateway.domains"},

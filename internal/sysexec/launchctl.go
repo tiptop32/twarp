@@ -62,3 +62,18 @@ func Kickstart(ctx context.Context, runner Runner, target string) error {
 	_, err := runner.Run(ctx, "launchctl", "kickstart", "-k", target)
 	return err
 }
+
+// Disable persists a "do not start" flag for a launchd service target. The
+// flag survives bootout and reboot, so launchd keeps the service off until
+// Enable clears it.
+func Disable(ctx context.Context, runner Runner, target string) error {
+	_, err := runner.Run(ctx, "launchctl", "disable", target)
+	return err
+}
+
+// Enable clears the persisted "do not start" flag for a launchd service
+// target. It succeeds even when the flag is absent, so it is idempotent.
+func Enable(ctx context.Context, runner Runner, target string) error {
+	_, err := runner.Run(ctx, "launchctl", "enable", target)
+	return err
+}

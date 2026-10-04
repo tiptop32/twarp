@@ -46,6 +46,15 @@ func (paths Paths) RulesDir() string { return filepath.Join(paths.Out, "rules") 
 // GeoDir returns the downloaded geo rule-set directory.
 func (paths Paths) GeoDir() string { return filepath.Join(paths.Out, "geo") }
 
+// OutputDir returns the generated system configuration directory. Unlike
+// Resolve, it does not require a user home or a sing-box installation.
+func OutputDir(system Sys) string {
+	if out := system.Getenv("TWARP_OUT"); out != "" {
+		return out
+	}
+	return defaultOut
+}
+
 // Resolve computes all paths without creating or changing files.
 func Resolve(system Sys) (Paths, error) {
 	home, err := resolveHome(system)
@@ -53,10 +62,7 @@ func Resolve(system Sys) (Paths, error) {
 		return Paths{}, err
 	}
 
-	out := system.Getenv("TWARP_OUT")
-	if out == "" {
-		out = defaultOut
-	}
+	out := OutputDir(system)
 
 	singBox := system.Getenv("TWARP_SINGBOX")
 	if singBox == "" {

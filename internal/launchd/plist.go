@@ -15,7 +15,7 @@ const (
 	SingBoxPlistPath = "/Library/LaunchDaemons/dev.twarp.singbox.plist"
 	// GeoPlistPath is the system launch daemon definition for daily geo updates.
 	GeoPlistPath = "/Library/LaunchDaemons/dev.twarp.geo.plist"
-	// NewsyslogPath is the sing-box log rotation definition.
+	// NewsyslogPath is the twarp log rotation definition.
 	NewsyslogPath = "/etc/newsyslog.d/twarp.conf"
 	logDir        = "/usr/local/var/log/twarp"
 	workingDir    = "/usr/local/var/lib/twarp"
@@ -55,9 +55,12 @@ func SingBoxPlist(paths config.Paths) ([]byte, error) {
 
 // GeoPlist renders the daily geo updater. It is intentionally a root
 // LaunchDaemon, not a GUI agent, because geo update writes root-owned files.
-func GeoPlist(executable string) ([]byte, error) {
+func GeoPlist(executable, out string) ([]byte, error) {
 	if !filepath.IsAbs(executable) {
 		return nil, errors.New("twarp executable path must be absolute")
+	}
+	if !filepath.IsAbs(out) {
+		return nil, errors.New("twarp output directory must be absolute")
 	}
 
 	var output bytes.Buffer
@@ -68,15 +71,22 @@ func GeoPlist(executable string) ([]byte, error) {
 		writeString(&output, argument, 4)
 	}
 	output.WriteString("  </array>\n")
+	output.WriteString("  <key>EnvironmentVariables</key>\n  <dict>\n")
+	writeKeyString(&output, "TWARP_OUT", out, 4)
+	output.WriteString("  </dict>\n")
 	output.WriteString("  <key>StartInterval</key>\n  <integer>86400</integer>\n")
 	output.WriteString("  <key>RunAtLoad</key>\n  <false/>\n")
+	writeKeyString(&output, "StandardOutPath", filepath.Join(logDir, "geo-update.log"), 2)
+	writeKeyString(&output, "StandardErrorPath", filepath.Join(logDir, "geo-update.err.log"), 2)
 	output.WriteString("</dict>\n</plist>\n")
 	return output.Bytes(), nil
 }
 
-// NewsyslogConfig returns the sing-box log rotation rule.
+// NewsyslogConfig returns twarp's log rotation rules.
 func NewsyslogConfig() []byte {
-	return []byte("/usr/local/var/log/twarp/sing-box.log 644 5 1024 * NJ\n")
+	return []byte("/usr/local/var/log/twarp/sing-box.log 644 5 1024 * NJ\n" +
+		"/usr/local/var/log/twarp/geo-update.log 644 5 1024 * NJ\n" +
+		"/usr/local/var/log/twarp/geo-update.err.log 644 5 1024 * NJ\n")
 }
 
 func writeKeyString(output *bytes.Buffer, key, value string, indent int) {
