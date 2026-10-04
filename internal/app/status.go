@@ -18,6 +18,7 @@ import (
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/state"
+	"github.com/tiptop32/twarp/internal/sysexec"
 	"github.com/tiptop32/twarp/internal/uri"
 )
 
@@ -176,6 +177,18 @@ func (s *Service) checkTunnel(ctx context.Context, status *Status) {
 	status.TunnelInterface, status.TunnelAddr = conflict.Interface, conflict.Addr
 	switch {
 	case conflict.OwnTUN:
+		// A stale own utun can outlive the service after `twarp stop`
+		// (launchd bootout removes the service, not the route), so the
+		// route alone does not prove the tunnel is active.
+		state, err := singBoxServiceState(ctx, s.deps.Runner)
+		if err != nil {
+			status.add(LevelFail, "tunnel", err.Error())
+			return
+		}
+		if state != sysexec.ServiceRunning {
+			status.add(LevelFail, "tunnel", fmt.Sprintf("stale route: %s %s holds the default route, but the sing-box service is not running; run: sudo twarp start", conflict.Interface, conflict.Addr))
+			return
+		}
 		status.TunnelActive = true
 		status.add(LevelOK, "tunnel", fmt.Sprintf("%s %s holds the default route", conflict.Interface, conflict.Addr))
 	case conflict.Hint != "":
@@ -183,6 +196,18 @@ func (s *Service) checkTunnel(ctx context.Context, status *Status) {
 	default:
 		status.add(LevelWarn, "tunnel", fmt.Sprintf("default route via %s: twarp tunnel is not active", conflict.Interface))
 	}
+}
+
+// singBoxServiceState classifies the launchd sing-box service state. An
+// unrecognized print failure surfaces as an error: the inspection failed, so
+// the tunnel state cannot be judged.
+func singBoxServiceState(ctx context.Context, runner sysexec.Runner) (sysexec.ServiceState, error) {
+	output, err := runner.Run(ctx, "launchctl", "print", sysexec.SystemTarget())
+	state := sysexec.PrintState(output, err)
+	if state == sysexec.ServiceUnknown {
+		return state, fmt.Errorf("inspect sing-box service: %w", err)
+	}
+	return state, nil
 }
 
 func checkGatewayCIDRs(status *Status, paths config.Paths) {

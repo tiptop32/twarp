@@ -113,6 +113,7 @@ func TestRunStartEnablesActiveTunnel(t *testing.T) {
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-utun-own.txt")}},
 		{Call: sysexec.Call{Name: "ifconfig", Args: []string{"utun9"}}, Response: sysexec.Response{Output: launchdFixture(t, "ifconfig-utun-own.txt")}},
+		{Call: printCall, Response: sysexec.Response{Output: []byte("state = running\n")}},
 		{Call: enableCall},
 	}}
 	fixture.deps.Runner = runner
@@ -138,6 +139,25 @@ func TestRunStartEnablesRunningServiceWithoutRoute(t *testing.T) {
 	stdout, stderr, code := runCLIForTest([]string{"start"}, fixture.deps)
 	if code != 0 || stderr != "" || !strings.Contains(stdout, "does not hold the default route yet") {
 		t.Fatalf("start = (%d, %q, %q), want running status", code, stdout, stderr)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An unrecognized launchctl print failure must abort start before any state
+// change: only known absence markers may classify the service as unloaded.
+func TestRunStartFailsOnUnexpectedPrintError(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 0)
+	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-en0.txt")}},
+		{Call: printCall, Response: sysexec.Response{Err: errors.New("launchctl print: connect failed: Broken pipe")}},
+	}}
+	fixture.deps.Runner = runner
+	fixture.deps.FS = &cliFakeFS{}
+	_, stderr, code := runCLIForTest([]string{"start"}, fixture.deps)
+	if code != 1 || !strings.Contains(stderr, "inspect sing-box service") {
+		t.Fatalf("start = (%d, %q), want inspect failure", code, stderr)
 	}
 	if err := runner.Verify(); err != nil {
 		t.Fatal(err)
@@ -180,6 +200,41 @@ func TestRunStartReenablesAfterStop(t *testing.T) {
 			fixture := newCLIRenderFixture(t, 0)
 			runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 				{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-en0.txt")}},
+				{Call: printCall, Response: scenario.printResp},
+				{Call: enableCall},
+				{Call: scenario.then},
+			}}
+			fixture.deps.Runner = runner
+			fixture.deps.FS = &cliFakeFS{}
+			stdout, stderr, code := runCLIForTest([]string{"start"}, fixture.deps)
+			if code != 0 || !strings.Contains(stdout, "started") {
+				t.Fatalf("start = (%d, %q, %q), want started", code, stdout, stderr)
+			}
+			if err := runner.Verify(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// After stop the own utun can keep holding the default route for a while.
+// start must not report "already running" from the route alone: launchd is
+// the authority, and an unloaded service gets bootstrap while a loaded but
+// inactive one gets kickstart.
+func TestRunStartRecoversFromStaleOwnTunAfterStop(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		printResp sysexec.Response
+		then      sysexec.Call
+	}{
+		{name: "booted out", printResp: sysexec.Response{Err: errors.New("Could not find service")}, then: bootstrapCall},
+		{name: "loaded but inactive", printResp: sysexec.Response{Output: []byte("state = exited\n")}, then: kickstartCall},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			fixture := newCLIRenderFixture(t, 0)
+			runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+				{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-utun-own.txt")}},
+				{Call: sysexec.Call{Name: "ifconfig", Args: []string{"utun9"}}, Response: sysexec.Response{Output: launchdFixture(t, "ifconfig-utun-own.txt")}},
 				{Call: printCall, Response: scenario.printResp},
 				{Call: enableCall},
 				{Call: scenario.then},

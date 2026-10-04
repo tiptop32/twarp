@@ -24,6 +24,50 @@ func TestLaunchctlTargets(t *testing.T) {
 	}
 }
 
+func TestPrintState(t *testing.T) {
+	tests := []struct {
+		name   string
+		output []byte
+		err    error
+		want   sysexec.ServiceState
+	}{
+		{
+			name:   "service running",
+			output: []byte("dev.twarp.singbox => {\n\tstate = running\n}\n"),
+			want:   sysexec.ServiceRunning,
+		},
+		{
+			name:   "service loaded but stopped",
+			output: []byte("dev.twarp.singbox => {\n\tstate = not running\n}\n"),
+			want:   sysexec.ServiceStopped,
+		},
+		{
+			name: "print says could not find service",
+			err:  errors.New("launchctl print system/dev.twarp.singbox: exit status 113: Could not find service \"dev.twarp.singbox\" in domain"),
+			want: sysexec.ServiceMissing,
+		},
+		{
+			name:   "print output says could not find specified service",
+			output: []byte("Could not find specified service\n"),
+			err:    errors.New("exit status 113"),
+			want:   sysexec.ServiceMissing,
+		},
+		{
+			name: "unexpected print failure stays unknown",
+			err:  errors.New("launchctl print: connect failed: Broken pipe"),
+			want: sysexec.ServiceUnknown,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := sysexec.PrintState(test.output, test.err); got != test.want {
+				t.Fatalf("PrintState() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLaunchctlHelpersUseExactArgv(t *testing.T) {
 	tests := []struct {
 		name string
