@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/netip"
 
+	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/geo"
 	"github.com/tiptop32/twarp/internal/launchd"
@@ -43,7 +44,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 			return state.LockShared(paths.LockFile())
 		},
 		GeoUpdate: func(ctx context.Context) error {
-			_, err := geo.Update(ctx, geo.Options{Dir: paths.GeoDir(), AuditFile: rootAuditFile(deps.Sys)})
+			_, err := geo.Update(ctx, geo.Options{Dir: paths.GeoDir(), AuditFile: app.RootAuditFile(deps.Sys)})
 			return err
 		},
 		RenderConfig: func() ([]byte, error) {

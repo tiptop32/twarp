@@ -6,8 +6,8 @@ import (
 	"io"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/tiptop32/twarp/internal/app"
 	mcpserver "github.com/tiptop32/twarp/internal/mcp"
-	"github.com/tiptop32/twarp/internal/render"
 )
 
 const mcpServerVersion = "dev"
@@ -29,14 +29,14 @@ func runMCP(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		_, _ = fmt.Fprintln(stderr, "twarp mcp: usage: twarp mcp")
 		return 2
 	}
-	gateway, err := newGatewayStore(deps)
+	gateway, err := deps.app(app.ActorMCP).Gateway()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp mcp: %v\n", err)
 		return 1
 	}
-	server := mcpserver.NewServer(gateway.Store, mcpserver.Info{
-		AllowedRanges: gateway.AllowedRanges,
-		Installed:     func() bool { return render.Installed(gateway.RulesDir) },
+	server := mcpserver.NewServer(gateway, mcpserver.Info{
+		AllowedRanges: gateway.AllowedRanges(),
+		Installed:     gateway.Installed,
 		Version:       mcpServerVersion,
 	})
 	factory := deps.MCPTransport

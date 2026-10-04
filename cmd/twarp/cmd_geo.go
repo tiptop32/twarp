@@ -6,14 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
 	"time"
 
+	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/geo"
 )
-
-const defaultRootLogDir = "/usr/local/var/log/twarp"
 
 type geoDeps struct {
 	Sys     config.Sys
@@ -42,16 +40,8 @@ func runGeo(args []string, stdout, stderr io.Writer, deps geoDeps) int {
 		_, _ = fmt.Fprintf(stderr, "twarp geo update: unexpected arguments: %v\n", fs.Args())
 		return 2
 	}
-	if deps.Sys.Geteuid() != 0 {
-		_, _ = fmt.Fprintln(stderr, "twarp geo update: run with sudo: geo/ is owned by root")
-		return 1
-	}
-
-	options := deps.Options
-	options.Dir = filepath.Join(config.OutputDir(deps.Sys), "geo")
-	options.AuditFile = rootAuditFile(deps.Sys)
-
-	report, err := geo.Update(context.Background(), options)
+	service := app.New(app.Deps{Sys: deps.Sys, GeoOptions: deps.Options}, app.ActorCLI)
+	report, err := service.GeoUpdate(context.Background())
 	for _, file := range report.Files {
 		_, _ = fmt.Fprintf(stdout, "updated %s: %d bytes, mtime %s\n", file.Name, file.Size, file.ModTime.UTC().Format(time.RFC3339Nano))
 	}

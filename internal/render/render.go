@@ -26,6 +26,9 @@ const (
 
 var directSuffixes = []string{"ru", "su", "xn--p1ai"}
 
+// DirectSuffixes returns the ASCII domain suffixes routed direct.
+func DirectSuffixes() []string { return append([]string(nil), directSuffixes...) }
+
 // Options controls filesystem paths and testable sing-box endpoints.
 type Options struct {
 	Paths     config.Paths
@@ -127,6 +130,16 @@ func dnsRules(cfg config.Config) []singbox.DNSRule {
 		singbox.DNSRule{DomainSuffix: directSuffixes, Server: "direct"},
 		singbox.DNSRule{RuleSet: []string{"geosite-category-ru"}, Server: "direct"},
 	)
+}
+
+// RouteRules returns the route rules Render writes, in order, so front ends can
+// show the routing that sing-box actually runs. The final outbound is vpn.
+func RouteRules(cfg config.Config) ([]singbox.RouteRule, error) {
+	_, _, socksPrefix, err := parseGatewaySOCKS(cfg.Gateway.Socks)
+	if err != nil {
+		return nil, err
+	}
+	return routeRules(cfg, socksPrefix), nil
 }
 
 // routeRules keeps the gateway rules ahead of ip_is_private: gateway hosts in

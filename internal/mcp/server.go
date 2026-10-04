@@ -7,8 +7,16 @@ import (
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/tiptop32/twarp/internal/state"
+	"github.com/tiptop32/twarp/internal/app"
 )
+
+// Gateway is the part of the application layer the MCP tools use; *app.Gateway
+// implements it, so MCP, CLI and TUI share one validation and audit path.
+type Gateway interface {
+	ListGatewayCIDRs(ctx context.Context) ([]app.GatewayEntry, error)
+	AddGatewayCIDR(ctx context.Context, request app.AddGatewayRequest) (app.AddResult, error)
+	RemoveGatewayCIDR(ctx context.Context, cidr string) (app.RemoveResult, error)
+}
 
 // Info supplies server metadata and read-only configuration shown to MCP clients.
 type Info struct {
@@ -57,7 +65,7 @@ type listOutput struct {
 }
 
 // NewServer constructs the twarp MCP server and registers its gateway tools.
-func NewServer(store *state.Store, info Info) *sdk.Server {
+func NewServer(gateway Gateway, info Info) *sdk.Server {
 	server := sdk.NewServer(&sdk.Implementation{Name: "twarp", Version: info.Version}, nil)
 	sdk.AddTool(server, &sdk.Tool{
 		Name: "gateway_ip_add",
@@ -65,7 +73,7 @@ func NewServer(store *state.Store, info Info) *sdk.Server {
 			"Domain names are not accepted. The CIDR must be inside an allowed range returned by gateway_ip_list, " +
 			"and broad ranges are rejected. Changes are applied without restarting sing-box.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, input addInput) (*sdk.CallToolResult, addOutput, error) {
-		result, err := store.Add(ctx, "mcp", input.CIDR, input.Comment, false)
+		result, err := gateway.AddGatewayCIDR(ctx, app.AddGatewayRequest{CIDR: input.CIDR, Comment: input.Comment})
 		if err != nil {
 			return nil, addOutput{}, err
 		}
@@ -84,7 +92,7 @@ func NewServer(store *state.Store, info Info) *sdk.Server {
 			"Domain names are not accepted. Use gateway_ip_list to inspect configured CIDRs and allowed ranges. " +
 			"Changes are applied without restarting sing-box.",
 	}, func(ctx context.Context, _ *sdk.CallToolRequest, input removeInput) (*sdk.CallToolResult, removeOutput, error) {
-		result, err := store.Remove(ctx, "mcp", input.CIDR)
+		result, err := gateway.RemoveGatewayCIDR(ctx, input.CIDR)
 		if err != nil {
 			return nil, removeOutput{}, err
 		}
@@ -99,8 +107,8 @@ func NewServer(store *state.Store, info Info) *sdk.Server {
 		Name: "gateway_ip_list",
 		Description: "List IP/CIDR networks reached through the SOCKS gateway and the allowed ranges for gateway_ip_add. " +
 			"These tools accept IP addresses and CIDRs, not domain names; changes apply without restarting sing-box.",
-	}, func(_ context.Context, _ *sdk.CallToolRequest, _ listInput) (*sdk.CallToolResult, listOutput, error) {
-		entries, err := store.List()
+	}, func(ctx context.Context, _ *sdk.CallToolRequest, _ listInput) (*sdk.CallToolResult, listOutput, error) {
+		entries, err := gateway.ListGatewayCIDRs(ctx)
 		if err != nil {
 			return nil, listOutput{}, err
 		}

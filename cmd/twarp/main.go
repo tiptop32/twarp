@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/singbox"
@@ -34,6 +35,7 @@ var commands = []command{
 	{"gateway", "manage gateway CIDRs"},
 	{"geo", "update geoip/geosite rule-sets"},
 	{"status", "show daemon and routing status"},
+	{"tui", "interactive status, gateway and connections view"},
 	{"mcp", "run the MCP server on stdio"},
 }
 
@@ -79,6 +81,15 @@ func defaultCLIDeps() cliDeps {
 	}
 }
 
+// app returns the application service for actor; every subcommand goes
+// through it instead of touching config, state or launchd directly.
+func (deps cliDeps) app(actor string) *app.Service {
+	return app.New(app.Deps{
+		Sys: deps.Sys, Runner: deps.Runner, FS: deps.FS, Dial: deps.Dial,
+		HTTPClient: deps.HTTPClient, LookupIP: deps.LookupIP, Now: deps.Now, Clash: deps.Clash,
+	}, actor)
+}
+
 // run dispatches args to a subcommand and returns the process exit code.
 func run(args []string, stdout, stderr io.Writer) int {
 	return runWithDeps(args, stdout, stderr, defaultCLIDeps())
@@ -113,6 +124,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: deps.Sys})
 	case "status":
 		return runStatus(args[1:], stdout, stderr, deps)
+	case "tui":
+		return runTUI(args[1:], stdout, stderr, deps)
 	case "mcp":
 		return runMCP(args[1:], stdout, stderr, deps)
 	}
