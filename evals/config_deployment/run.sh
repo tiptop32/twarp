@@ -15,5 +15,5 @@ go test ./internal/launchd \
   -count=1
 
 go test -race ./cmd/twarp \
-  -run '^(TestRunApplyFailedCheckPreservesInstalledConfig|TestRunApplyFailedReloadRestoresInstalledFiles|TestRunApplyRejectsUninstalledService|TestRunApplyChecksAndReloadsRunningService|TestRunInstallHoldsStateLockUntilRuleSetWrite)$' \
+  -run '^(TestRunApplyFailedCheckPreservesInstalledConfig|TestRunApplyFailedReloadRestoresInstalledFiles|TestRunApplyRejectsUninstalledService|TestRunApplyRejectsUnexpectedPrintError|TestRunApplyChecksAndReloadsRunningService|TestRunInstallHoldsStateLockUntilRuleSetWrite)$' \
   -count=1

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Executable eval for the start/stop lifecycle: stop must persist a disabled
-# launchd flag, start must re-enable, apply after stop must not start the
+# launchd flag, start must re-enable, a stale own utun after stop must not
+# make start report "already running", apply after stop must not start the
 # tunnel, and install after stop must re-enable before bootstrap. The
 # scenarios run through the CLI regression tests, which drive runStart,
 # runStop, runApply and launchd.Install against a fake launchctl and fail on
@@ -18,6 +19,9 @@ fi
 scenarios=(
   "stop persists disabled state:TestRunStopPersistsDisabledStateIdempotently"
   "start re-enables after stop:TestRunStartReenablesAfterStop"
+  "start recovers from stale own utun:TestRunStartRecoversFromStaleOwnTunAfterStop"
+  "start aborts on unexpected print error:TestRunStartFailsOnUnexpectedPrintError"
+  "start recognizes loaded vs unloaded service:./internal/app:TestStartFailsOnUnexpectedPrintError|TestStartTreatsKnownAbsenceAsUnload"
   "start restores enabled state while running:TestRunStartEnablesActiveTunnel|TestRunStartEnablesRunningServiceWithoutRoute"
   "start loads and restarts services:TestRunStartLoadsUnloadedService|TestRunStartRestartsLoadedButInactiveService"
   "apply keeps stopped service stopped:TestRunApplyKeepsDisabledServiceStopped"
@@ -29,9 +33,13 @@ cd "$REPO_ROOT"
 failed=0
 for scenario in "${scenarios[@]}"; do
   name=${scenario%%:*}
-  pattern=${scenario#*:}
+  rest=${scenario#*:}
+  pattern=$rest
   package=./cmd/twarp
-  if [[ $name == "install re-enables before bootstrap" ]]; then
+  if [[ $rest == ./*:* ]]; then
+    package=${rest%%:*}
+    pattern=${rest#*:}
+  elif [[ $name == "install re-enables before bootstrap" ]]; then
     package=./internal/launchd
   fi
   echo "== $name"

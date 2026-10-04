@@ -114,6 +114,56 @@ func TestRunStatusWarnsWhenTunnelIsInactive(t *testing.T) {
 	}
 }
 
+func TestRunStatusReportsStaleOwnTunnel(t *testing.T) {
+	for name, printResponse := range map[string]sysexec.Response{
+		"service absent": {Err: errors.New("Could not find specified service")},
+		"service stopped": {
+			Output: []byte("dev.twarp.singbox => {\n\tstate = not running\n}\n"),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newStatusFixture(t, http.StatusOK)
+			fixture.runner = &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+				{Call: routeCall, Response: sysexec.Response{Output: statusFixtureData(t, "route-utun-own.txt")}},
+				{Call: sysexec.Call{Name: "ifconfig", Args: []string{"utun9"}}, Response: sysexec.Response{Output: statusFixtureData(t, "ifconfig-utun-own.txt")}},
+				{Call: printCall, Response: printResponse},
+			}}
+			fixture.deps.Runner = fixture.runner
+			stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
+			if code != 1 || !strings.Contains(stdout, "FAIL tunnel: stale route: utun9 172.19.0.1 holds the default route, but the sing-box service is not running; run: sudo twarp start") {
+				t.Fatalf("status = (%d, %q), want stale own utun failure", code, stdout)
+			}
+			if err := fixture.runner.Verify(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// An unrecognized launchctl print failure must surface as an inspection
+// failure, not as a stale-route verdict: the tunnel state is unknown.
+func TestRunStatusFailsOnUnexpectedPrintError(t *testing.T) {
+	fixture := newStatusFixture(t, http.StatusOK)
+	fixture.runner = &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: routeCall, Response: sysexec.Response{Output: statusFixtureData(t, "route-utun-own.txt")}},
+		{Call: sysexec.Call{Name: "ifconfig", Args: []string{"utun9"}}, Response: sysexec.Response{Output: statusFixtureData(t, "ifconfig-utun-own.txt")}},
+		{Call: printCall, Response: sysexec.Response{Err: errors.New("launchctl print: connect failed: Broken pipe")}},
+	}}
+	fixture.deps.Runner = fixture.runner
+	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
+	if code != 1 || !strings.Contains(stdout, "FAIL tunnel: inspect sing-box service") {
+		t.Fatalf("status = (%d, %q), want tunnel inspection failure", code, stdout)
+	}
+	for _, unwanted := range []string{"stale route", "sudo twarp start"} {
+		if strings.Contains(stdout, unwanted) {
+			t.Errorf("stdout = %q, want no %q", stdout, unwanted)
+		}
+	}
+	if err := fixture.runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunStatusWarnsWhenGatewayCIDRsAreEmpty(t *testing.T) {
 	fixture := newStatusFixture(t, http.StatusOK)
 	if err := os.Remove(filepath.Join(fixture.home, "gateway-ips.json")); err != nil {
@@ -265,6 +315,7 @@ func newStatusFixture(t *testing.T, clashStatus int) statusFixture {
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: sysexec.Call{Name: "route", Args: []string{"-n", "get", "1.1.1.1"}}, Response: sysexec.Response{Output: statusFixtureData(t, "route-utun-own.txt")}},
 		{Call: sysexec.Call{Name: "ifconfig", Args: []string{"utun9"}}, Response: sysexec.Response{Output: statusFixtureData(t, "ifconfig-utun-own.txt")}},
+		{Call: printCall, Response: sysexec.Response{Output: []byte("state = running\n")}},
 	}}
 	return statusFixture{
 		deps: cliDeps{

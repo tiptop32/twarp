@@ -1,7 +1,7 @@
 .PHONY: build install uninstall-bin test integration eval eval-config-deployment eval-launchd-geo lint secrets-check
 
 GEO_EVAL_SCRIPT := ./evals/launchd_geo/run.sh
-EVAL_SCRIPTS := ./evals/config_deployment/run.sh ./evals/gateway_state_recovery/run.sh ./evals/lifecycle/run.sh ./evals/mcp_tool_choice/run.sh
+EVAL_SCRIPTS := ./evals/config_deployment/run.sh ./evals/gateway_state_recovery/run.sh ./evals/lifecycle/run.sh ./evals/mcp_tool_choice/run.sh ./evals/status/run.sh
 PREFIX ?= /usr/local
 
 build:

@@ -36,28 +36,33 @@ func (s *Service) Start(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	switch {
-	case conflict.OwnTUN:
+	if conflict.Hint != "" {
+		return "", fmt.Errorf("%s (%s %s)", conflict.Hint, conflict.Interface, conflict.Addr)
+	}
+
+	// A stale own utun can retain the route after bootout. The launchd state
+	// determines whether the service is running or needs to be started.
+	service, printErr := s.deps.Runner.Run(ctx, "launchctl", "print", sysexec.SystemTarget())
+	state := sysexec.PrintState(service, printErr)
+	if state == sysexec.ServiceUnknown {
+		return "", fmt.Errorf("inspect sing-box service: %w", printErr)
+	}
+	running := state == sysexec.ServiceRunning
+	if conflict.OwnTUN && running {
 		if err := sysexec.Enable(ctx, s.deps.Runner, sysexec.SystemTarget()); err != nil {
 			return "", err
 		}
 		return "already running on " + conflict.Interface, nil
-	case conflict.Hint != "":
-		return "", fmt.Errorf("%s (%s %s)", conflict.Hint, conflict.Interface, conflict.Addr)
 	}
-
-	// A loaded service that does not hold the route has crashed or was stopped
-	// by launchd; kickstart restarts it. An unloaded one needs bootstrap. stop
-	// persists a disabled flag, so clear it first: launchd refuses kickstart
-	// for a disabled service and bootstrap of one never runs it.
-	service, printErr := s.deps.Runner.Run(ctx, "launchctl", "print", sysexec.SystemTarget())
+	// Stop persists a disabled flag, so clear it before kickstart or
+	// bootstrap. launchd refuses to run a disabled service.
 	if err := sysexec.Enable(ctx, s.deps.Runner, sysexec.SystemTarget()); err != nil {
 		return "", err
 	}
-	if printErr == nil && strings.Contains(string(service), "state = running") {
+	if running {
 		return "sing-box is running but does not hold the default route yet; check: twarp status", nil
 	}
-	if printErr == nil {
+	if state == sysexec.ServiceStopped {
 		err = sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget())
 	} else {
 		err = sysexec.Bootstrap(ctx, s.deps.Runner, "system", launchd.SingBoxPlistPath)
@@ -183,8 +188,12 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		return failBeforePromotion(err)
 	}
 	stopped := false
-	service, err := s.deps.Runner.Run(ctx, "launchctl", "print", sysexec.SystemTarget())
-	if err != nil {
+	service, printErr := s.deps.Runner.Run(ctx, "launchctl", "print", sysexec.SystemTarget())
+	serviceState := sysexec.PrintState(service, printErr)
+	if serviceState == sysexec.ServiceUnknown {
+		return failBeforePromotion(fmt.Errorf("inspect sing-box service: %w", printErr))
+	}
+	if serviceState == sysexec.ServiceMissing {
 		if _, statErr := s.deps.FS.Stat(launchd.SingBoxPlistPath); statErr == nil {
 			disabled, disabledErr := s.deps.Runner.Run(ctx, "launchctl", "print-disabled", "system")
 			if disabledErr == nil && serviceDisabled(disabled) {
@@ -222,7 +231,7 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		return "", s.failApply(cause)
 	}
 	result := "kickstarted"
-	if strings.Contains(string(service), "state = running") {
+	if serviceState == sysexec.ServiceRunning {
 		if err := singbox.Reload(ctx, s.deps.Runner); err != nil {
 			return failAfterPromotion(fmt.Errorf("reload sing-box: %w", err), true)
 		}

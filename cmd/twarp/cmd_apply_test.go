@@ -101,7 +101,7 @@ func TestRunApplyKeepsDisabledServiceStopped(t *testing.T) {
 	}
 	runnerFake := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: sysexec.Call{Name: "/test/sing-box", Args: []string{"check", "-c", filepath.Join(fixture.out, "config.json")}}},
-		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", sysexec.SystemTarget()}}, Response: sysexec.Response{Err: errors.New("service not loaded")}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", sysexec.SystemTarget()}}, Response: sysexec.Response{Err: errors.New("Could not find service \"dev.twarp.singbox\" in domain for system")}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print-disabled", "system"}}, Response: sysexec.Response{Output: disabledOutput}},
 	}}
 	fixture.deps.Runner = &applyCandidateRunner{Fake: runnerFake, configPath: filepath.Join(fixture.out, "config.json")}
@@ -128,7 +128,7 @@ func TestRunApplyRejectsUninstalledService(t *testing.T) {
 	}
 	runnerFake := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: sysexec.Call{Name: "/test/sing-box", Args: []string{"check", "-c", configPath}}},
-		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: errors.New("service not found")}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: errors.New("Could not find service \"dev.twarp.singbox\" in domain for system")}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print-disabled", "system"}}, Response: sysexec.Response{Output: []byte(`"dev.twarp.singbox" => false`)}},
 	}}
 	runner := &applyCandidateRunner{Fake: runnerFake, configPath: configPath}
@@ -154,11 +154,61 @@ func TestRunApplyRejectsUninstalledService(t *testing.T) {
 	}
 }
 
+// A launchctl print failure that is not proof of absence must abort apply
+// before the candidate is promoted: the installed config and rule-set stay
+// in place and the service is neither reloaded nor kickstarted.
+func TestRunApplyRejectsUnexpectedPrintError(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 0)
+	configPath := filepath.Join(fixture.out, "config.json")
+	installed := []byte("working config\n")
+	if err := os.WriteFile(configPath, installed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ruleSetPath := filepath.Join(fixture.out, "rules", "gateway-ip.json")
+	if err := os.MkdirAll(filepath.Dir(ruleSetPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previousRuleSet := []byte("working rule-set\n")
+	if err := os.WriteFile(ruleSetPath, previousRuleSet, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runnerFake := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: sysexec.Call{Name: "/test/sing-box", Args: []string{"check", "-c", configPath}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", sysexec.SystemTarget()}}, Response: sysexec.Response{Err: errors.New("launchctl print system/dev.twarp.singbox: exit status 5: Input/output error")}},
+	}}
+	runner := &applyCandidateRunner{Fake: runnerFake, configPath: configPath}
+	fixture.deps.Runner = runner
+	fixture.deps.FS = &cliFakeFS{}
+	stdout, stderr, code := runCLIForTest([]string{"apply"}, fixture.deps)
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "inspect sing-box service") {
+		t.Fatalf("apply = (%d, %q, %q), want inspect-service error", code, stdout, stderr)
+	}
+	if err := runnerFake.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil || !reflect.DeepEqual(got, installed) {
+		t.Fatalf("config after rejected apply = %q, error = %v, want %q", got, err, installed)
+	}
+	gotRules, err := os.ReadFile(ruleSetPath)
+	if err != nil || !reflect.DeepEqual(gotRules, previousRuleSet) {
+		t.Fatalf("gateway rule-set after rejected apply = %q, error = %v, want %q", gotRules, err, previousRuleSet)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(fixture.out, ".config.json.tmp-*"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("candidate files after rejected apply = %v, error = %v", leftovers, err)
+	}
+	audit, err := os.ReadFile(filepath.Join(fixture.deps.Sys.Getenv("TWARP_LOG_DIR"), "audit.jsonl"))
+	if err != nil || !strings.Contains(string(audit), "inspect sing-box service") {
+		t.Fatalf("audit = %q, error = %v, want inspect error record", audit, err)
+	}
+}
+
 func TestRunApplyRejectsDisabledLabelWithoutInstalledPlist(t *testing.T) {
 	fixture := newCLIRenderFixture(t, 0)
 	runnerFake := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: sysexec.Call{Name: "/test/sing-box", Args: []string{"check", "-c", filepath.Join(fixture.out, "config.json")}}},
-		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", sysexec.SystemTarget()}}, Response: sysexec.Response{Err: errors.New("service not loaded")}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", sysexec.SystemTarget()}}, Response: sysexec.Response{Err: errors.New("Could not find service \"dev.twarp.singbox\" in domain for system")}},
 	}}
 	fixture.deps.Runner = &applyCandidateRunner{Fake: runnerFake, configPath: filepath.Join(fixture.out, "config.json")}
 	fixture.deps.FS = &cliFakeFS{stats: map[string]error{launchd.SingBoxPlistPath: os.ErrNotExist}}

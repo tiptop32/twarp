@@ -28,6 +28,43 @@ func GUITarget(uid int) string {
 	return GUIDomain(uid) + "/" + GeoLabel
 }
 
+// ServiceState is the outcome of classifying a launchctl print result.
+type ServiceState int
+
+// Service states reported by PrintState.
+const (
+	// ServiceRunning means the service is loaded and running.
+	ServiceRunning ServiceState = iota
+	// ServiceStopped means the service is loaded but not running.
+	ServiceStopped
+	// ServiceMissing means launchctl answered with a known "not loaded"
+	// error, so the service is absent from its domain.
+	ServiceMissing
+	// ServiceUnknown means print failed in an unrecognized way and the
+	// service state cannot be determined.
+	ServiceUnknown
+)
+
+// PrintState classifies the output and error of a `launchctl print` call.
+// Only well-known absence markers are treated as missing: any other failure
+// leaves the state unknown so callers can surface the inspection error
+// instead of guessing.
+func PrintState(output []byte, err error) ServiceState {
+	if err == nil {
+		if strings.Contains(string(output), "state = running") {
+			return ServiceRunning
+		}
+		return ServiceStopped
+	}
+	detail := string(output) + "\n" + err.Error()
+	if strings.Contains(detail, "exit status 113") ||
+		strings.Contains(detail, "Could not find service") ||
+		strings.Contains(detail, "Could not find specified service") {
+		return ServiceMissing
+	}
+	return ServiceUnknown
+}
+
 // Bootstrap loads a service plist into a launchd domain.
 func Bootstrap(ctx context.Context, runner Runner, domain, plistPath string) error {
 	_, err := runner.Run(ctx, "launchctl", "bootstrap", domain, plistPath)
