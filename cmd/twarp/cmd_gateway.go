@@ -9,8 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/tiptop32/twarp/internal/render"
-	"github.com/tiptop32/twarp/internal/state"
+	"github.com/tiptop32/twarp/internal/app"
 )
 
 func runGateway(args []string, stdout, stderr io.Writer, deps cliDeps) int {
@@ -23,47 +22,40 @@ func runGateway(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return 2
 	}
 
-	gateway, err := newGatewayStore(deps)
+	gateway, err := deps.app(app.ActorCLI).Gateway()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp gateway: %v\n", err)
 		return 1
 	}
 	switch args[0] {
 	case "add":
-		code := runGatewayAdd(gateway.Store, args[1:], stdout, stderr)
-		warnNotInstalled(stderr, gateway.RulesDir, code)
+		code := runGatewayAdd(gateway, args[1:], stdout, stderr)
+		warnNotInstalled(stderr, gateway, code)
 		return code
 	case "rm":
-		code := runGatewayRemove(gateway.Store, args[1:], stdout, stderr)
-		warnNotInstalled(stderr, gateway.RulesDir, code)
+		code := runGatewayRemove(gateway, args[1:], stdout, stderr)
+		warnNotInstalled(stderr, gateway, code)
 		return code
 	case "ls":
-		return runGatewayList(gateway.Store, args[1:], stdout, stderr)
+		return runGatewayList(gateway, args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "twarp gateway: unknown command %q\n", args[0])
 		return 2
 	}
 }
 
-func runGatewayAdd(store *state.Store, args []string, stdout, stderr io.Writer) int {
+func runGatewayAdd(gateway *app.Gateway, args []string, stdout, stderr io.Writer) int {
 	input, comment, force, err := parseGatewayAddArgs(args)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp gateway add: %v\n", err)
 		return 2
 	}
-	result, err := store.Add(context.Background(), "cli", input, comment, force)
+	result, err := gateway.AddGatewayCIDR(context.Background(), app.AddGatewayRequest{CIDR: input, Comment: comment, Force: force})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp gateway add: %v\n", err)
 		return 1
 	}
-	switch result.Status {
-	case state.AddStatusAdded:
-		_, _ = fmt.Fprintf(stdout, "added %s\n", result.CIDR)
-	case state.AddStatusAlreadyPresent:
-		_, _ = fmt.Fprintf(stdout, "already present: %s\n", result.CIDR)
-	case state.AddStatusCoveredBy:
-		_, _ = fmt.Fprintf(stdout, "covered by %s: %s\n", result.CoveredBy, result.CIDR)
-	}
+	_, _ = fmt.Fprintln(stdout, app.AddResultText(result))
 	printWarnings(stderr, result.Warnings)
 	return 0
 }
@@ -94,31 +86,27 @@ func parseGatewayAddArgs(args []string) (input, comment string, force bool, err 
 	return positionals[0], comment, force, nil
 }
 
-func runGatewayRemove(store *state.Store, args []string, stdout, stderr io.Writer) int {
+func runGatewayRemove(gateway *app.Gateway, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
 		_, _ = fmt.Fprintln(stderr, "twarp gateway rm: usage: twarp gateway rm <cidr>")
 		return 2
 	}
-	result, err := store.Remove(context.Background(), "cli", args[0])
+	result, err := gateway.RemoveGatewayCIDR(context.Background(), args[0])
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp gateway rm: %v\n", err)
 		return 1
 	}
-	if result.Status == state.RemoveStatusRemoved {
-		_, _ = fmt.Fprintf(stdout, "removed %s\n", result.CIDR)
-	} else {
-		_, _ = fmt.Fprintf(stdout, "not found: %s\n", result.CIDR)
-	}
+	_, _ = fmt.Fprintln(stdout, app.RemoveResultText(result))
 	printWarnings(stderr, result.Warnings)
 	return 0
 }
 
-func runGatewayList(store *state.Store, args []string, stdout, stderr io.Writer) int {
+func runGatewayList(gateway *app.Gateway, args []string, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		_, _ = fmt.Fprintln(stderr, "twarp gateway ls: usage: twarp gateway ls")
 		return 2
 	}
-	entries, err := store.List()
+	entries, err := gateway.ListGatewayCIDRs(context.Background())
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp gateway ls: %v\n", err)
 		return 1
@@ -146,8 +134,8 @@ func printWarnings(stderr io.Writer, warnings []string) {
 }
 
 // warnNotInstalled explains why a successful change did not reach sing-box yet.
-func warnNotInstalled(stderr io.Writer, rulesDir string, code int) {
-	if code == 0 && !render.Installed(rulesDir) {
-		_, _ = fmt.Fprintln(stderr, "warning: twarp is not installed yet: saved to gateway-ips.json; sudo twarp install will write the rule-set")
+func warnNotInstalled(stderr io.Writer, gateway *app.Gateway, code int) {
+	if code == 0 && !gateway.Installed() {
+		_, _ = fmt.Fprintln(stderr, "warning: "+app.NotInstalledWarning)
 	}
 }

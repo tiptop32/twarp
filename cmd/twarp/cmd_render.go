@@ -6,12 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/netip"
 	"path/filepath"
 
-	"github.com/tiptop32/twarp/internal/config"
+	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/render"
-	"github.com/tiptop32/twarp/internal/state"
 )
 
 func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
@@ -29,7 +27,7 @@ func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return 2
 	}
 
-	_, prefixes, data, err := renderInputs(deps.Sys)
+	_, prefixes, data, err := deps.app(app.ActorCLI).RenderInputs()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp render: %v\n", err)
 		return 1
@@ -61,30 +59,6 @@ func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	}
 	_, _ = fmt.Fprintf(stdout, "rendered %s and %s\n", configPath, render.RuleSetPath(rulesDir))
 	return 0
-}
-
-func renderInputs(system config.Sys) (config.Paths, []netip.Prefix, []byte, error) {
-	paths, err := config.Resolve(system)
-	if err != nil {
-		return config.Paths{}, nil, nil, err
-	}
-	cfg, err := config.Load(paths.ConfigFile())
-	if err != nil {
-		return config.Paths{}, nil, nil, err
-	}
-	secrets, err := config.LoadSecrets(paths.SecretsFile())
-	if err != nil {
-		return config.Paths{}, nil, nil, err
-	}
-	prefixes, err := state.ReadPrefixes(paths.GatewayIPsFile(), paths.LockFile())
-	if err != nil {
-		return config.Paths{}, nil, nil, err
-	}
-	data, err := render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN})
-	if err != nil {
-		return config.Paths{}, nil, nil, err
-	}
-	return paths, prefixes, data, nil
 }
 
 func maskRenderedSecrets(data []byte) ([]byte, error) {

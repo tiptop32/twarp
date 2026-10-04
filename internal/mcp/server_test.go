@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/state"
 )
@@ -34,7 +35,7 @@ func TestGatewayIPAddPersistsAndRenders(t *testing.T) {
 		GatewaySocks:  netip.MustParseAddr("192.0.2.10"),
 		OnChange:      render.OnChangeWriter(rulesDir),
 	})
-	client := connectTestClient(ctx, t, NewServer(store, Info{
+	client := connectTestClient(ctx, t, NewServer(app.NewGateway(store, app.ActorMCP, nil, ""), Info{
 		AllowedRanges: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")},
 		Installed:     func() bool { return true },
 		Version:       "test",
@@ -245,7 +246,7 @@ func newTestSession(t *testing.T, installed bool) *sdk.ClientSession {
 		AllowedRanges: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")},
 		GatewaySocks:  netip.MustParseAddr("192.0.2.10"),
 	})
-	return connectTestClient(context.Background(), t, NewServer(store, Info{
+	return connectTestClient(context.Background(), t, NewServer(app.NewGateway(store, app.ActorMCP, nil, ""), Info{
 		AllowedRanges: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")},
 		Installed:     func() bool { return installed },
 		Version:       "test",
