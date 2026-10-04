@@ -90,6 +90,41 @@ func (s *Service) Gateway() (*Gateway, error) {
 	return NewGateway(store, s.actor, cfg.Gateway.AllowedRanges, paths.RulesDir()), nil
 }
 
+// ListGatewayCIDRs loads the current config and lists the gateway CIDRs. Like
+// the other Service gateway methods it rereads twarp.yaml on every call, so a
+// long-running front end picks up allowed_ranges edits.
+func (s *Service) ListGatewayCIDRs(ctx context.Context) ([]GatewayEntry, error) {
+	gateway, err := s.Gateway()
+	if err != nil {
+		return nil, err
+	}
+	return gateway.ListGatewayCIDRs(ctx)
+}
+
+// AddGatewayCIDR loads the current config and adds a gateway CIDR.
+func (s *Service) AddGatewayCIDR(ctx context.Context, request AddGatewayRequest) (AddResult, error) {
+	gateway, err := s.Gateway()
+	if err != nil {
+		return AddResult{}, err
+	}
+	return gateway.AddGatewayCIDR(ctx, request)
+}
+
+// RemoveGatewayCIDR loads the current config and removes a gateway CIDR.
+func (s *Service) RemoveGatewayCIDR(ctx context.Context, cidr string) (RemoveResult, error) {
+	gateway, err := s.Gateway()
+	if err != nil {
+		return RemoveResult{}, err
+	}
+	return gateway.RemoveGatewayCIDR(ctx, cidr)
+}
+
+// Installed reports whether install created the rule-set that sing-box reads.
+func (s *Service) Installed() bool {
+	paths, err := config.Resolve(s.deps.Sys)
+	return err == nil && render.Installed(paths.RulesDir())
+}
+
 // ListGatewayCIDRs returns the gateway CIDRs sorted by address.
 func (g *Gateway) ListGatewayCIDRs(context.Context) ([]GatewayEntry, error) {
 	return g.store.List()

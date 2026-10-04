@@ -23,14 +23,15 @@ const (
 	tuiFastRefresh    = 2 * time.Second
 	tuiStatusInterval = 5 * time.Second
 	tuiProbeTimeout   = 3 * time.Second
-	tuiActionTimeout  = 5 * time.Second
-	tuiNetTimeout     = 10 * time.Second
-	tuiMaxWidth       = 84
+	// tuiStatusTimeout only backstops Status: every probe in it has its own,
+	// shorter timeout, and they run one after another.
+	tuiStatusTimeout = 20 * time.Second
+	tuiActionTimeout = 5 * time.Second
+	tuiMaxWidth      = 84
 )
 
-// tuiBackend is what the TUI reads and changes. It is the application layer:
-// *app.Service and *app.Gateway, plus the sudo command for root actions.
-// Tests replace it with a fake.
+// tuiBackend is what the TUI reads and changes: the methods of *app.Service,
+// plus the sudo command for root actions. Tests replace it with a fake.
 type tuiBackend interface {
 	Status(ctx context.Context, options app.StatusOptions) app.Status
 	Routes(ctx context.Context) (app.Routes, error)
@@ -48,7 +49,6 @@ type tuiBackend interface {
 
 type liveTUIBackend struct {
 	*app.Service
-	*app.Gateway
 	executable string
 }
 
@@ -80,8 +80,9 @@ func runTUI(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 
 func newLiveTUIBackend(deps cliDeps) (liveTUIBackend, error) {
 	service := deps.app(app.ActorTUI)
-	gateway, err := service.Gateway()
-	if err != nil {
+	// Fail before the screen opens when the config cannot back the gateway
+	// list; later calls reload it, so edits to twarp.yaml are picked up.
+	if _, err := service.Gateway(); err != nil {
 		return liveTUIBackend{}, err
 	}
 	executable := "twarp"
@@ -90,7 +91,7 @@ func newLiveTUIBackend(deps cliDeps) (liveTUIBackend, error) {
 			executable = path
 		}
 	}
-	return liveTUIBackend{Service: service, Gateway: gateway, executable: executable}, nil
+	return liveTUIBackend{Service: service, executable: executable}, nil
 }
 
 type tuiScreen int
@@ -149,17 +150,31 @@ type (
 	statusTickMsg struct{}
 )
 
+// egressResult is the last manual network check. Periodic status refreshes
+// skip that probe, so the result is kept apart from status.
+type egressResult struct {
+	check  app.Check
+	ip     string
+	viaVPN bool
+}
+
 type tuiModel struct {
 	backend tuiBackend
 	screen  tuiScreen
 	mode    tuiMode
 	width   int
 	height  int
+	// fastEvery and statusEvery are the poll intervals; zero turns polling off.
+	fastEvery   time.Duration
+	statusEvery time.Duration
 
 	status        app.Status
 	statusLoaded  bool
 	statusLoading bool
-	netChecked    bool
+	egress        *egressResult
+	// stopPending records what the start/stop prompt offered, so a status
+	// refresh while it is open cannot flip the action.
+	stopPending bool
 
 	routes    app.Routes
 	routesErr error
@@ -183,30 +198,36 @@ type tuiModel struct {
 func newTUIModel(backend tuiBackend) tuiModel {
 	input := textinput.New()
 	input.CharLimit = 128
-	return tuiModel{backend: backend, input: input, statusLoading: true}
+	return tuiModel{
+		backend: backend, input: input, statusLoading: true,
+		fastEvery: tuiFastRefresh, statusEvery: tuiStatusInterval,
+	}
 }
 
 func (m tuiModel) Init() tea.Cmd {
 	return tea.Batch(m.loadStatus(false), m.loadRoutes(), m.loadConnections(), m.loadEntries(),
-		fastTick(), statusTick())
+		m.fastTick(), m.statusTick())
 }
 
-func fastTick() tea.Cmd {
-	return tea.Tick(tuiFastRefresh, func(time.Time) tea.Msg { return fastTickMsg{} })
+func (m tuiModel) fastTick() tea.Cmd {
+	return tick(m.fastEvery, fastTickMsg{})
 }
 
-func statusTick() tea.Cmd {
-	return tea.Tick(tuiStatusInterval, func(time.Time) tea.Msg { return statusTickMsg{} })
+func (m tuiModel) statusTick() tea.Cmd {
+	return tick(m.statusEvery, statusTickMsg{})
+}
+
+func tick(every time.Duration, msg tea.Msg) tea.Cmd {
+	if every <= 0 {
+		return nil
+	}
+	return tea.Tick(every, func(time.Time) tea.Msg { return msg })
 }
 
 func (m tuiModel) loadStatus(network bool) tea.Cmd {
 	backend := m.backend
 	return func() tea.Msg {
-		timeout := tuiProbeTimeout
-		if network {
-			timeout = tuiNetTimeout
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), tuiStatusTimeout)
 		defer cancel()
 		return statusMsg{status: backend.Status(ctx, app.StatusOptions{Network: network}), network: network}
 	}
@@ -297,8 +318,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case statusMsg:
 		m.status, m.statusLoaded, m.statusLoading = msg.status, true, false
-		m.netChecked = msg.network
 		if msg.network {
+			m.egress = egressFrom(msg.status)
 			m.message = "" // the egress row now shows the result
 		}
 		return m, nil
@@ -331,12 +352,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text = fmt.Sprintf("%s: %v", msg.action, msg.err)
 		}
 		m.setMessage(lastLine(text), msg.err != nil)
-		m.statusLoading = true
+		// start and stop move the default route: an earlier egress result is stale.
+		m.statusLoading, m.egress = true, nil
 		return m, tea.Batch(m.loadStatus(false), m.loadRoutes(), m.loadConnections())
 	case fastTickMsg:
 		// Poll only what is on screen: connections and logs change all the time,
 		// and the gateway list picks up changes made through the CLI or MCP.
-		cmds := []tea.Cmd{fastTick()}
+		cmds := []tea.Cmd{m.fastTick()}
 		switch m.screen {
 		case screenDashboard, screenConnections:
 			cmds = append(cmds, m.loadConnections())
@@ -347,12 +369,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case statusTickMsg:
-		// The network check is manual (n): it reaches an outside service.
-		if m.screen == screenDashboard && !m.statusLoading && !m.netChecked {
+		// The network check stays manual (n): it reaches an outside service.
+		if m.screen == screenDashboard && !m.statusLoading {
 			m.statusLoading = true
-			return m, tea.Batch(m.loadStatus(false), statusTick())
+			return m, tea.Batch(m.loadStatus(false), m.statusTick())
 		}
-		return m, statusTick()
+		return m, m.statusTick()
 	case tea.KeyPressMsg:
 		if m.mode != modeBrowse {
 			return m.updateDialog(msg)
@@ -364,6 +386,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) setMessage(text string, isErr bool) {
 	m.message, m.messageErr = text, isErr
+}
+
+func egressFrom(status app.Status) *egressResult {
+	for _, check := range status.Checks {
+		if check.Name == "egress" {
+			return &egressResult{check: check, ip: status.EgressIP, viaVPN: status.EgressViaVPN}
+		}
+	}
+	return nil
 }
 
 func (m tuiModel) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -390,21 +421,27 @@ func (m tuiModel) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadConnections()
 	case "n":
 		if m.statusLoading {
+			m.setMessage("status is still loading; press n again in a moment", false)
 			return m, nil
 		}
 		m.statusLoading = true
 		m.setMessage("checking egress…", false)
 		return m, m.loadStatus(true)
 	case "R", "ctrl+r":
-		m.statusLoading, m.netChecked = true, false
-		return m, tea.Batch(m.loadStatus(false), m.loadRoutes(), m.loadConnections(), m.loadEntries())
+		cmds := []tea.Cmd{m.loadRoutes(), m.loadConnections(), m.loadEntries()}
+		if !m.statusLoading {
+			m.statusLoading = true
+			cmds = append(cmds, m.loadStatus(false))
+		}
+		m.egress = nil
+		return m, tea.Batch(cmds...)
 	case "s":
 		// Start or stop depends on the tunnel state, so wait for the first status.
 		if !m.statusLoaded {
 			m.setMessage("status is still loading", true)
 			return m, nil
 		}
-		m.mode = modeConfirmToggle
+		m.mode, m.stopPending = modeConfirmToggle, m.status.TunnelActive
 		return m, nil
 	case "a":
 		return m, m.runRoot("apply", "apply")
@@ -448,7 +485,7 @@ func (m tuiModel) updateDialog(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if mode == modeConfirmRemove {
 				return m, m.removeEntry(m.pendingCIDR)
 			}
-			if m.status.TunnelActive {
+			if m.stopPending {
 				return m, m.runRoot("stop", "stop")
 			}
 			return m, m.runRoot("start", "start")
@@ -590,22 +627,24 @@ func (m tuiModel) viewStatusGrid() string {
 		running = dot(app.LevelWarn) + " Up, not routing"
 	}
 	tun := "—"
-	if status.TunnelInterface != "" {
+	switch {
+	case status.TunnelActive:
 		tun = status.TunnelInterface
-		if !status.TunnelActive {
-			tun += styleDim.Render(" (not twarp)")
-		}
+	case status.TunnelInterface != "":
+		tun = styleDim.Render("— (route via " + status.TunnelInterface + ")")
 	}
 	gateway := dot(app.LevelFail) + " unreachable"
 	if status.GatewayReachable {
 		gateway = dot(app.LevelOK) + " OK"
 	}
 	vpn := dot(app.LevelFail) + " not imported"
-	if m.routes.VPNProtocol != "" {
+	switch {
+	case m.routesErr != nil:
+		vpn = dot(app.LevelWarn) + " unknown"
+	case m.routes.VPNProtocol != "" && m.egress != nil:
+		vpn = dot(m.egress.check.Level) + " " + m.routes.VPNProtocol
+	case m.routes.VPNProtocol != "":
 		vpn = dot(app.LevelOK) + " " + m.routes.VPNProtocol
-		if level, found := m.checkLevel("egress"); found {
-			vpn = dot(level) + " " + m.routes.VPNProtocol
-		}
 	}
 	geo := dot(app.LevelFail) + " missing"
 	if level, _ := m.checkLevel("geo"); !status.GeoUpdated.IsZero() {
@@ -672,22 +711,25 @@ func (m tuiModel) viewTraffic() string {
 		gatewayState = styleOK.Render("OK")
 	}
 	vpnTarget, vpnState := styleDim.Render("egress not checked [n]"), ""
-	if m.status.EgressIP != "" {
-		vpnTarget = "egress " + m.status.EgressIP
-		vpnState = styleWarn.Render("WARN")
-		if m.status.EgressViaVPN {
-			vpnState = styleOK.Render("OK")
-		}
-	} else if level, found := m.checkLevel("egress"); found {
-		vpnTarget, vpnState = "egress check failed", levelStyle(level).Render(string(level))
+	switch {
+	case m.egress != nil && m.egress.ip != "":
+		vpnTarget = "egress " + m.egress.ip
+		vpnState = levelStyle(m.egress.check.Level).Render(string(m.egress.check.Level))
+	case m.egress != nil:
+		vpnTarget = "egress check failed"
+		vpnState = levelStyle(m.egress.check.Level).Render(string(m.egress.check.Level))
 	}
 	rows := [][]string{
 		{app.OutboundGateway, m.status.GatewaySocks, gatewayState, conns(app.OutboundGateway)},
-		{app.OutboundDirect, "ISP", "", conns(app.OutboundDirect)},
+		{app.OutboundDirect, styleDim.Render("no probe"), "", conns(app.OutboundDirect)},
 		{app.OutboundVPN, vpnTarget, vpnState, conns(app.OutboundVPN)},
 	}
 	lines = append(lines, formatTable(nil, rows)...)
-	for _, check := range m.status.Checks {
+	checks := m.status.Checks
+	if m.egress != nil {
+		checks = append(checks[:len(checks):len(checks)], m.egress.check)
+	}
+	for _, check := range checks {
 		if check.Level != app.LevelOK {
 			lines = append(lines, levelStyle(check.Level).Render("! "+check.Name+": "+check.Detail))
 		}
@@ -830,7 +872,7 @@ func (m tuiModel) viewFooter() string {
 	case modeConfirmRemove:
 		return styleWarn.Render(fmt.Sprintf("remove %s? [y/N]", m.pendingCIDR))
 	case modeConfirmToggle:
-		if m.status.TunnelActive {
+		if m.stopPending {
 			return styleWarn.Render("stop the tunnel and disable autostart? sudo twarp stop [y/N]")
 		}
 		return styleWarn.Render("start the tunnel? sudo twarp start [y/N]")

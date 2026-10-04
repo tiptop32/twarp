@@ -84,17 +84,15 @@ func (backend *fakeTUIBackend) SudoCommand(args ...string) *exec.Cmd {
 	return exec.Command("true")
 }
 
-// runCmd runs cmd unless it blocks: ticks and cursor blinks sleep, while the
-// fake backend answers at once. Tests drive ticks explicitly.
-func runCmd(cmd tea.Cmd) tea.Msg {
-	done := make(chan tea.Msg, 1)
-	go func() { done <- cmd() }()
-	select {
-	case msg := <-done:
-		return msg
-	case <-time.After(50 * time.Millisecond):
-		return nil
-	}
+// newTestTUIModel turns polling and cursor blinking off, so every command the
+// model returns finishes at once and tests can run them synchronously.
+func newTestTUIModel(backend tuiBackend) tuiModel {
+	model := newTUIModel(backend)
+	model.fastEvery, model.statusEvery = 0, 0
+	styles := model.input.Styles()
+	styles.Cursor.Blink = false
+	model.input.SetStyles(styles)
+	return model
 }
 
 // send applies msg and feeds the results of the returned commands back.
@@ -105,7 +103,7 @@ func send(t *testing.T, model tuiModel, msg tea.Msg) tuiModel {
 	if cmd == nil {
 		return model
 	}
-	return sendResult(t, model, runCmd(cmd))
+	return sendResult(t, model, cmd())
 }
 
 func sendResult(t *testing.T, model tuiModel, msg tea.Msg) tuiModel {
@@ -116,7 +114,7 @@ func sendResult(t *testing.T, model tuiModel, msg tea.Msg) tuiModel {
 	case tea.BatchMsg:
 		for _, cmd := range msg {
 			if cmd != nil {
-				model = sendResult(t, model, runCmd(cmd))
+				model = sendResult(t, model, cmd())
 			}
 		}
 		return model
@@ -180,12 +178,12 @@ func dashboardBackend() *fakeTUIBackend {
 
 func initModel(t *testing.T, backend tuiBackend) tuiModel {
 	t.Helper()
-	model := newTUIModel(backend)
-	return sendResult(t, model, runCmd(model.Init()))
+	model := newTestTUIModel(backend)
+	return sendResult(t, model, model.Init()())
 }
 
 func TestTUIDashboardShowsStatusRoutesAndTraffic(t *testing.T) {
-	model := newTUIModel(dashboardBackend())
+	model := newTestTUIModel(dashboardBackend())
 	if !strings.Contains(plainView(model), "checking…") {
 		t.Fatalf("initial view = %q, want checking", plainView(model))
 	}
@@ -219,10 +217,17 @@ func TestTUINetCheckShowsEgress(t *testing.T) {
 	if view := plainView(model); !strings.Contains(view, "egress 203.0.113.9   OK") || strings.Contains(view, "checking egress") {
 		t.Fatalf("view = %q, want egress result without the progress message", view)
 	}
-	// The periodic refresh skips network probes and must not hide the result.
+	// The periodic refresh skips the network probe: it keeps refreshing the
+	// tunnel state and keeps the egress result.
+	backend.status.TunnelActive = false
 	model = send(t, model, statusTickMsg{})
-	if view := plainView(model); !strings.Contains(view, "egress 203.0.113.9") {
-		t.Fatalf("view after tick = %q, want egress kept", view)
+	view := plainView(model)
+	if !strings.Contains(view, "egress 203.0.113.9") || !strings.Contains(view, "● Up, not routing") {
+		t.Fatalf("view after tick = %q, want fresh status and kept egress", view)
+	}
+	model = send(t, model, key("R"))
+	if view := plainView(model); !strings.Contains(view, "egress not checked [n]") {
+		t.Fatalf("view after refresh = %q, want egress cleared", view)
 	}
 }
 
@@ -265,13 +270,20 @@ func TestTUIRootActionsUseSudoWithSameBinary(t *testing.T) {
 	if view := plainView(model); !strings.Contains(view, "start the tunnel? sudo twarp start [y/N]") {
 		t.Fatalf("view = %q, want start confirmation", view)
 	}
+	// A refresh while the prompt is open must not flip the confirmed action.
+	backend.status.TunnelActive = true
+	model = send(t, model, statusTickMsg{})
+	send(t, model, key("y"))
+	if last := backend.sudo[len(backend.sudo)-1]; strings.Join(last, " ") != "start" {
+		t.Fatalf("sudo after refresh = %v, want start", last)
+	}
 }
 
 func TestTUIGatewayAddAndRemove(t *testing.T) {
 	backend := &fakeTUIBackend{
 		entries: []app.GatewayEntry{{CIDR: netip.MustParsePrefix("100.64.10.0/24"), AddedBy: "cli", AddedAt: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC), Comment: "dev network"}},
 	}
-	model := send(t, newTUIModel(backend), key("g"))
+	model := send(t, newTestTUIModel(backend), key("g"))
 	view := plainView(model)
 	for _, want := range []string{"twarp › Gateway CIDRs", "CIDR", "100.64.10.0/24", "cli", "2026-10-03", "dev network", "[+] Add"} {
 		if !strings.Contains(view, want) {
@@ -319,7 +331,7 @@ func TestTUIGatewayAddAndRemove(t *testing.T) {
 
 func TestTUIGatewayAddErrorAndEscape(t *testing.T) {
 	backend := &fakeTUIBackend{installed: true}
-	model := send(t, newTUIModel(backend), key("g"))
+	model := send(t, newTestTUIModel(backend), key("g"))
 	if !strings.Contains(plainView(model), "no gateway CIDRs") {
 		t.Fatalf("view = %q, want empty hint", plainView(model))
 	}

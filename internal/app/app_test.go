@@ -82,13 +82,13 @@ func TestGatewayRefusesRootAndRootActionsRequireIt(t *testing.T) {
 	if _, err := root.Gateway(); !errors.Is(err, ErrRootForbidden) {
 		t.Fatalf("root Gateway() error = %v, want ErrRootForbidden", err)
 	}
-	user, _ := newTestService(t, 501)
+	service, _ := newTestService(t, 501)
 	ctx := context.Background()
 	for name, action := range map[string]func() error{
-		"start": func() error { _, err := user.Start(ctx); return err },
-		"stop":  func() error { _, err := user.Stop(ctx); return err },
-		"apply": func() error { _, err := user.Apply(ctx); return err },
-		"geo":   func() error { _, err := user.GeoUpdate(ctx); return err },
+		"start": func() error { _, err := service.Start(ctx); return err },
+		"stop":  func() error { _, err := service.Stop(ctx); return err },
+		"apply": func() error { _, err := service.Apply(ctx); return err },
+		"geo":   func() error { _, err := service.GeoUpdate(ctx); return err },
 	} {
 		if err := action(); !errors.Is(err, ErrRootRequired) {
 			t.Errorf("%s as user error = %v, want ErrRootRequired", name, err)
