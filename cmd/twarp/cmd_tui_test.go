@@ -28,6 +28,7 @@ type fakeTUIBackend struct {
 	connErr     error
 	logs        []string
 	installed   bool
+	sudoErr     error
 	added       []string
 	removed     []string
 	sudo        [][]string
@@ -79,9 +80,12 @@ func (backend *fakeTUIBackend) RemoveGatewayCIDR(_ context.Context, cidr string)
 
 func (backend *fakeTUIBackend) Installed() bool { return backend.installed }
 
-func (backend *fakeTUIBackend) SudoCommand(args ...string) *exec.Cmd {
+func (backend *fakeTUIBackend) SudoCommand(args ...string) (*exec.Cmd, error) {
 	backend.sudo = append(backend.sudo, args)
-	return exec.Command("true")
+	if backend.sudoErr != nil {
+		return nil, backend.sudoErr
+	}
+	return exec.Command("true"), nil
 }
 
 // newTestTUIModel turns polling and cursor blinking off, so every command the
@@ -455,7 +459,63 @@ func TestLiveTUIBackendSharesAppLayer(t *testing.T) {
 	if routes.GatewayCIDRs != 1 || strings.Join(routes.GatewayDomains, ",") != "intra.example" {
 		t.Fatalf("routes = %+v", routes)
 	}
-	if got := strings.Join(backend.SudoCommand("geo", "update").Args, " "); got != "sudo -- /usr/local/bin/twarp geo update" {
-		t.Fatalf("sudo command = %q", got)
+	backend.executable = filepath.Join(base, "missing")
+	if _, err := backend.SudoCommand("apply"); err == nil {
+		t.Fatal("sudo command for a missing binary succeeded")
+	}
+}
+
+func TestSudoCommandRefusesReplaceableBinary(t *testing.T) {
+	directory := t.TempDir()
+	binary := filepath.Join(directory, "twarp")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "twarp-link")
+	if err := os.Symlink(binary, link); err != nil {
+		t.Fatal(err)
+	}
+	backend := liveTUIBackend{executable: link, ownerUID: os.Getuid()}
+	command, err := backend.SudoCommand("geo", "update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(command.Args, " "); got != "sudo -- "+resolved+" geo update" {
+		t.Fatalf("sudo command = %q, want resolved binary", got)
+	}
+
+	if err := os.Chmod(binary, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.SudoCommand("apply"); err == nil || !strings.Contains(err.Error(), "writable by group or others") {
+		t.Fatalf("world-writable binary error = %v", err)
+	}
+	if err := os.Chmod(binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.SudoCommand("apply"); err == nil || !strings.Contains(err.Error(), "writable by group or others") {
+		t.Fatalf("world-writable directory error = %v", err)
+	}
+	if os.Getuid() != 0 {
+		backend.ownerUID = 0
+		if _, err := backend.SudoCommand("apply"); err == nil || !strings.Contains(err.Error(), "not root") {
+			t.Fatalf("user-owned binary error = %v, want refusal", err)
+		}
+	}
+}
+
+func TestTUIRootActionReportsRefusedBinary(t *testing.T) {
+	backend := dashboardBackend()
+	backend.sudoErr = errors.New("refusing to run it under sudo: /home/alice/go/bin/twarp is owned by uid 501, not root")
+	model := send(t, initModel(t, backend), key("a"))
+	if view := plainView(model); !strings.Contains(view, "apply: refusing to run it under sudo") {
+		t.Fatalf("view = %q, want refusal message", view)
 	}
 }

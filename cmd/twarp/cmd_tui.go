@@ -5,9 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -44,16 +47,58 @@ type tuiBackend interface {
 	// SudoCommand runs this twarp binary under sudo with args. Root actions are
 	// the only place the TUI starts a process: privileges cannot be raised in
 	// process, and the sudo'd binary runs the same app.Service.
-	SudoCommand(args ...string) *exec.Cmd
+	SudoCommand(args ...string) (*exec.Cmd, error)
 }
 
 type liveTUIBackend struct {
 	*app.Service
 	executable string
+	// ownerUID is the owner a binary run under sudo must have; tests change it.
+	ownerUID int
 }
 
-func (backend liveTUIBackend) SudoCommand(args ...string) *exec.Cmd {
-	return exec.Command("sudo", append([]string{"--", backend.executable}, args...)...)
+// SudoCommand refuses a binary that this user could replace: sudo would run
+// it as root. The resolved path is run, so a later symlink swap is no help.
+func (backend liveTUIBackend) SudoCommand(args ...string) (*exec.Cmd, error) {
+	path, err := trustedBinary(backend.executable, backend.ownerUID)
+	if err != nil {
+		return nil, fmt.Errorf("refusing to run it under sudo: %w; install it with make install, or run sudo twarp in a shell", err)
+	}
+	return exec.Command("sudo", append([]string{"--", path}, args...)...), nil
+}
+
+// trustedBinary resolves path and checks that the file and every directory
+// above it belong to root (or ownerUID) and are not writable by group or
+// others. A world-writable directory with the sticky bit, such as /tmp, is
+// allowed: others cannot rename what they do not own.
+func trustedBinary(path string, ownerUID int) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err = filepath.Abs(resolved); err != nil {
+		return "", err
+	}
+	for current := resolved; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return "", err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return "", fmt.Errorf("cannot read the owner of %s", current)
+		}
+		if uid := int(stat.Uid); uid != 0 && uid != ownerUID {
+			return "", fmt.Errorf("%s is owned by uid %d, not root", current, uid)
+		}
+		sticky := info.IsDir() && info.Mode()&os.ModeSticky != 0
+		if info.Mode().Perm()&0o022 != 0 && !sticky {
+			return "", fmt.Errorf("%s is writable by group or others", current)
+		}
+		if parent := filepath.Dir(current); parent == current {
+			return resolved, nil
+		}
+	}
 }
 
 func runTUI(args []string, stdout, stderr io.Writer, deps cliDeps) int {
@@ -303,7 +348,10 @@ func installWarnings(backend tuiBackend, warnings []string) []string {
 // runRoot suspends the TUI and runs a root action through sudo, so the password
 // prompt reaches the terminal. Output is captured and shown afterwards.
 func (m tuiModel) runRoot(action string, args ...string) tea.Cmd {
-	command := m.backend.SudoCommand(args...)
+	command, err := m.backend.SudoCommand(args...)
+	if err != nil {
+		return func() tea.Msg { return actionDoneMsg{action: action, err: err} }
+	}
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
 	return tea.ExecProcess(command, func(err error) tea.Msg {
