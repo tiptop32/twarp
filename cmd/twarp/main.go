@@ -14,6 +14,7 @@ import (
 	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/launchd"
+	"github.com/tiptop32/twarp/internal/resolver"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
@@ -51,6 +52,7 @@ type cliDeps struct {
 	Runner       sysexec.Runner
 	FS           launchd.FS
 	Executable   func() (string, error)
+	ResolverDir  string
 	Dial         func(context.Context, string, string) (net.Conn, error)
 	HTTPClient   *http.Client
 	LookupIP     func(context.Context, string, string) ([]net.IP, error)
@@ -62,16 +64,17 @@ func defaultCLIDeps() cliDeps {
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	dialer := &net.Dialer{}
 	return cliDeps{
-		Sys:        config.OSSys{},
-		Stdin:      os.Stdin,
-		Random:     rand.Reader,
-		Runner:     sysexec.ExecRunner{},
-		FS:         launchd.OSFS{},
-		Executable: os.Executable,
-		Dial:       dialer.DialContext,
-		HTTPClient: httpClient,
-		LookupIP:   net.DefaultResolver.LookupIP,
-		Now:        time.Now,
+		Sys:         config.OSSys{},
+		Stdin:       os.Stdin,
+		Random:      rand.Reader,
+		Runner:      sysexec.ExecRunner{},
+		FS:          launchd.OSFS{},
+		Executable:  os.Executable,
+		ResolverDir: resolver.DefaultDir,
+		Dial:        dialer.DialContext,
+		HTTPClient:  httpClient,
+		LookupIP:    net.DefaultResolver.LookupIP,
+		Now:         time.Now,
 		MCPTransport: func(io.Reader, io.Writer) mcpTransport {
 			return stdioMCPTransport()
 		},
@@ -87,6 +90,7 @@ func (deps cliDeps) app(actor string) *app.Service {
 	return app.New(app.Deps{
 		Sys: deps.Sys, Runner: deps.Runner, FS: deps.FS, Dial: deps.Dial,
 		HTTPClient: deps.HTTPClient, LookupIP: deps.LookupIP, Now: deps.Now, Clash: deps.Clash,
+		ResolverDir: deps.ResolverDir,
 	}, actor)
 }
 

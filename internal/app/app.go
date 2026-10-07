@@ -48,6 +48,9 @@ type Deps struct {
 	Now        func() time.Time
 	// Clash builds the sing-box liveness probe used after gateway changes.
 	Clash func(config.Config, config.Secrets) func() bool
+	// ResolverDir is the macOS per-domain resolver directory that Apply, Start
+	// and Stop keep in step with gateway.domains. Empty disables it.
+	ResolverDir string
 	// GeoOptions overrides download settings; Dir and AuditFile are always set
 	// by GeoUpdate.
 	GeoOptions geo.Options

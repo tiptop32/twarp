@@ -52,7 +52,7 @@ func (s *Service) Start(ctx context.Context) (string, error) {
 		if err := sysexec.Enable(ctx, s.deps.Runner, sysexec.SystemTarget()); err != nil {
 			return "", err
 		}
-		return "already running on " + conflict.Interface, nil
+		return s.startResult(ctx, "already running on "+conflict.Interface)
 	}
 	// Stop persists a disabled flag, so clear it before kickstart or
 	// bootstrap. launchd refuses to run a disabled service.
@@ -60,7 +60,7 @@ func (s *Service) Start(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if running {
-		return "sing-box is running but does not hold the default route yet; check: twarp status", nil
+		return s.startResult(ctx, "sing-box is running but does not hold the default route yet; check: twarp status")
 	}
 	if state == sysexec.ServiceStopped {
 		err = sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget())
@@ -70,7 +70,27 @@ func (s *Service) Start(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "started; check: twarp status", nil
+	return s.startResult(ctx, "started; check: twarp status")
+}
+
+// startResult points the gateway domains at the running tunnel's DNS.
+func (s *Service) startResult(ctx context.Context, summary string) (string, error) {
+	if s.deps.ResolverDir == "" {
+		return summary, nil
+	}
+	paths, err := config.Resolve(s.deps.Sys)
+	if err != nil {
+		return "", fmt.Errorf("%s, but %w", summary, err)
+	}
+	cfg, err := config.Load(paths.ConfigFile())
+	if err != nil {
+		return "", fmt.Errorf("%s, but %w", summary, err)
+	}
+	note, err := s.SyncResolvers(ctx, cfg.Gateway.Domains)
+	if err != nil {
+		return "", fmt.Errorf("%s, but %w", summary, err)
+	}
+	return summary + note, nil
 }
 
 // Stop turns the tunnel off and keeps everything installed, so the default
@@ -86,6 +106,9 @@ func (s *Service) Stop(ctx context.Context) (string, error) {
 	}
 	if err := sysexec.Disable(ctx, s.deps.Runner, sysexec.SystemTarget()); err != nil {
 		return "", err
+	}
+	if err := s.RemoveResolvers(ctx); err != nil {
+		return "", fmt.Errorf("stopped, but %w", err)
 	}
 	return "stopped; start again: sudo twarp start", nil
 }
@@ -105,27 +128,32 @@ func (s *Service) GeoUpdate(ctx context.Context) (geo.Report, error) {
 // RenderInputs loads config, secrets and gateway state and renders the
 // production sing-box config.
 func (s *Service) RenderInputs() (config.Paths, []netip.Prefix, []byte, error) {
+	paths, _, prefixes, data, err := s.renderInputs()
+	return paths, prefixes, data, err
+}
+
+func (s *Service) renderInputs() (config.Paths, config.Config, []netip.Prefix, []byte, error) {
 	paths, err := config.Resolve(s.deps.Sys)
 	if err != nil {
-		return config.Paths{}, nil, nil, err
+		return config.Paths{}, config.Config{}, nil, nil, err
 	}
 	cfg, err := config.Load(paths.ConfigFile())
 	if err != nil {
-		return config.Paths{}, nil, nil, err
+		return config.Paths{}, config.Config{}, nil, nil, err
 	}
 	secrets, err := config.LoadSecrets(paths.SecretsFile())
 	if err != nil {
-		return config.Paths{}, nil, nil, err
+		return config.Paths{}, config.Config{}, nil, nil, err
 	}
 	prefixes, err := state.ReadPrefixes(paths.GatewayIPsFile(), paths.LockFile())
 	if err != nil {
-		return config.Paths{}, nil, nil, err
+		return config.Paths{}, config.Config{}, nil, nil, err
 	}
 	data, err := render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN})
 	if err != nil {
-		return config.Paths{}, nil, nil, err
+		return config.Paths{}, config.Config{}, nil, nil, err
 	}
-	return paths, prefixes, data, nil
+	return paths, cfg, prefixes, data, nil
 }
 
 // Apply re-renders the config, checks it with sing-box and reloads or starts
@@ -159,7 +187,7 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		release()
 		return "", s.failApply(fmt.Errorf("read installed gateway rule-set: %w", readErr))
 	}
-	paths, prefixes, data, err := s.RenderInputs()
+	paths, cfg, prefixes, data, err := s.renderInputs()
 	if err != nil {
 		release()
 		return "", s.failApply(err)
@@ -240,10 +268,14 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		return failAfterPromotion(fmt.Errorf("kickstart sing-box: %w", err), false)
 	}
 	release()
+	note, resolverErr := s.SyncResolvers(ctx, cfg.Gateway.Domains)
+	if resolverErr != nil {
+		return "", s.failApply(fmt.Errorf("applied and %s sing-box, but %w", result, resolverErr))
+	}
 	if err := s.appendRootAudit("apply", result); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("applied and %s sing-box", result), nil
+	return fmt.Sprintf("applied and %s sing-box", result) + note, nil
 }
 
 func serviceDisabled(output []byte) bool {
