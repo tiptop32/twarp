@@ -62,7 +62,11 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if err := launchd.Install(context.Background(), deps.launchd(), options); err != nil {
 		return lifecycleError("install", stderr, err)
 	}
-	_, _ = fmt.Fprintln(stdout, "installed sing-box and geo launchd services")
+	note, err := deps.app(app.ActorCLI).SyncResolvers(context.Background(), cfg.Gateway.Domains)
+	if err != nil {
+		return lifecycleError("install", stderr, fmt.Errorf("services installed, but %w", err))
+	}
+	_, _ = fmt.Fprintln(stdout, "installed sing-box and geo launchd services"+note)
 	_, _ = fmt.Fprintln(stdout, "check: twarp status")
 	return 0
 }
@@ -80,6 +84,9 @@ func runUninstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return lifecycleError("uninstall", stderr, err)
 	}
 	if err := launchd.Uninstall(context.Background(), deps.launchd()); err != nil {
+		return lifecycleError("uninstall", stderr, err)
+	}
+	if err := deps.app(app.ActorCLI).RemoveResolvers(context.Background()); err != nil {
 		return lifecycleError("uninstall", stderr, err)
 	}
 	_, _ = fmt.Fprintf(stdout, "uninstalled; config kept in %s, rules in %s\n", paths.Home, paths.Out)

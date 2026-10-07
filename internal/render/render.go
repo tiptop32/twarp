@@ -24,6 +24,11 @@ const (
 	InboundMixed = "mixed"
 )
 
+// TUNDNS is the peer address of the TUN subnet. Port 53 traffic routed into
+// the TUN is hijacked by sing-box, so this address works as a system DNS
+// server for gateway domains.
+const TUNDNS = "172.19.0.2"
+
 var directSuffixes = []string{"ru", "su", "xn--p1ai"}
 
 // DirectSuffixes returns the ASCII domain suffixes routed direct.

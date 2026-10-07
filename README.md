@@ -77,7 +77,7 @@ log_level: warn
 | --- | --- |
 | `twarp import` | Прочитать VLESS URI только из stdin и сохранить секреты. Пример: `twarp import < key.txt`. Не запускать под sudo. |
 | `twarp render [--out DIR]` | Вывести замаскированный `config.json` или записать полный конфиг и `rules/gateway-ip.json` в `DIR`. |
-| `sudo twarp apply` | Перегенерировать конфиг, проверить его через sing-box и перезагрузить или запустить демон. |
+| `sudo twarp apply` | Перегенерировать конфиг, проверить его через sing-box, перезагрузить или запустить демон и обновить `/etc/resolver` для `gateway.domains`. |
 | `sudo twarp install` | Установить sing-box и geo launchd-демоны, rule-set'ы и ротацию логов. |
 | `sudo twarp start` | Включить туннель и автозапуск: загрузить установленный демон или перезапустить упавший. Откажет, если маршрут держит другой VPN. |
 | `sudo twarp stop` | Выключить туннель и автозапуск после перезагрузки, оставив всё установленным; маршрут возвращается к сети. `apply` обновит конфиг, но не запустит туннель. |
@@ -145,6 +145,8 @@ TUI работает от пользователя. Для `s`, `a` и `u` он 
 - Удалённый HTTPS-DNS отправляется через `vpn`.
 - `dns.strategy` — `prefer_ipv4`; IPv6 TUN-маршрут сохраняется, чтобы IPv6 не ушёл мимо VPN.
 
+Системный DNS для `gateway.domains` twarp направляет в TUN через `/etc/resolver/<домен>` с `nameserver 172.19.0.2`; там запрос перехватывает sing-box. Без такого файла macOS может отправить запрос DNS-серверу из локальной подсети напрямую, мимо TUN: маршрут к своей подсети точнее маршрутов TUN, и имя шлюза получает NXDOMAIN. `apply`, `install` и `start` создают и обновляют эти файлы, `stop` и `uninstall` удаляют. Свои файлы twarp помечает первой строкой-комментарием и трогает только их. Чужой файл, например от прежнего VPN-клиента, остаётся как есть, а `apply` называет такие домены в выводе; удалите файл, если домен должен вести twarp. Проверяйте резолв через `dscacheutil -q host -a name <имя>`, а не через `dig`: `dig` не читает `/etc/resolver`.
+
 `reverse_mapping` на macOS ненадёжен из-за системного DNS-кэша и не заменяет список CIDR. Несниффаемые протоколы, например SSH и RDP, к имени шлюза маршрутизируются по IP. Если имя резолвится в адрес вне списка шлюза, добавьте его через `twarp gateway add`. Если адрес лежит вне `gateway.allowed_ranges`, сначала расширьте этот список в `twarp.yaml`.
 
 `strict_route` не используется: на macOS он не даёт нужного эффекта. `install` откажется работать, если default route уже держит чужой `utun` или загружен Homebrew-сервис sing-box. Остановите прежний VPN и `brew services stop sing-box`, затем повторите установку.
@@ -163,6 +165,7 @@ TUI работает от пользователя. Для `s`, `a` и `u` он 
 | Логи geo updater | `/usr/local/var/log/twarp/geo-update.log`, `/usr/local/var/log/twarp/geo-update.err.log` |
 | Root-аудит | `/usr/local/var/log/twarp/audit.jsonl` |
 | Ротация логов | `/etc/newsyslog.d/twarp.conf` |
+| DNS доменов шлюза | `/etc/resolver/<домен>` (только файлы с меткой twarp) |
 
 `audit.jsonl` растёт без ограничения размера. Если файл стал слишком большим, удалите или заархивируйте его вручную.
 
@@ -175,6 +178,8 @@ TUI работает от пользователя. Для `s`, `a` и `u` он 
 **Хост шлюза открывается через VPN.** Проверьте порядок правил и `twarp gateway ls`. Если хост резолвится в RFC1918, добавьте его подсеть в `allowed_ranges` и CIDR в state. Для SSH или RDP добавляйте IP/CIDR явно: sniffing имени может не сработать.
 
 **Установка сообщает о другом `utun`.** Завершите прежний VPN-клиент, проверьте `route -n get 192.0.2.1`, затем повторите `sudo twarp install`. twarp не забирает default route у чужого VPN автоматически.
+
+**Домен шлюза не резолвится (`Could not resolve host`).** Выполните `sudo twarp apply` и посмотрите, нет ли домена в строке `not managed by twarp`. Затем `cat /etc/resolver/<домен>` должен показать `nameserver 172.19.0.2`, а `dscacheutil -q host -a name <имя>` — адрес.
 
 **DNS не отвечает или утекает.** Проверьте адреса DNS в `twarp.yaml`, доступность DNS шлюза по TCP через SOCKS и вывод `twarp status`. Для проверки на живой машине используйте `sudo scripts/smoke.sh --leak-check`; интерфейс можно задать через `--iface IFACE`, а ISP IPv6-префикс — через `--isp-v6-prefix CIDR`.
 

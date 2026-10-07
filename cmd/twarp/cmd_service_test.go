@@ -251,3 +251,100 @@ func TestRunStartRecoversFromStaleOwnTunAfterStop(t *testing.T) {
 		})
 	}
 }
+
+// Gateway domains need a resolver file while the tunnel runs: otherwise a DNS
+// server on the local subnet answers outside the TUN. start and apply write
+// the files, stop removes them, and a foreign file is never touched.
+func TestResolverFilesFollowTunnelLifecycle(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 0)
+	resolverDir := filepath.Join(t.TempDir(), "resolver")
+	fixture.deps.ResolverDir = resolverDir
+	fixture.deps.FS = &cliFakeFS{}
+	if err := os.MkdirAll(resolverDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreignPath := filepath.Join(resolverDir, "other.example")
+	if err := os.WriteFile(foreignPath, []byte("nameserver 192.0.2.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	flushCall := sysexec.Call{Name: "killall", Args: []string{"-HUP", "mDNSResponder"}}
+	managedPath := filepath.Join(resolverDir, "intra.example")
+
+	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: routeCall, Response: sysexec.Response{Output: launchdFixture(t, "route-en0.txt")}},
+		{Call: printCall, Response: sysexec.Response{Output: []byte("state = not running\n")}},
+		{Call: enableCall},
+		{Call: kickstartCall},
+		{Call: flushCall},
+	}}
+	fixture.deps.Runner = runner
+	stdout, stderr, code := runCLIForTest([]string{"start"}, fixture.deps)
+	if code != 0 || !strings.Contains(stdout, "started") {
+		t.Fatalf("start = (%d, %q, %q), want started", code, stdout, stderr)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(managedPath)
+	if err != nil || !strings.Contains(string(data), "nameserver 172.19.0.2\n") {
+		t.Fatalf("resolver file = (%q, %v), want TUN DNS nameserver", data, err)
+	}
+
+	// The file is current, so a running apply changes nothing and skips the flush.
+	runner = &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: sysexec.Call{Name: "/test/sing-box", Args: []string{"check", "-c", filepath.Join(fixture.out, "config.json")}}},
+		{Call: printCall, Response: sysexec.Response{Output: []byte("state = running\n")}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"kill", "SIGHUP", "system/dev.twarp.singbox"}}},
+	}}
+	fixture.deps.Runner = &applyCandidateRunner{Fake: runner, configPath: filepath.Join(fixture.out, "config.json")}
+	stdout, stderr, code = runCLIForTest([]string{"apply"}, fixture.deps)
+	if code != 0 || !strings.Contains(stdout, "applied and reloaded") {
+		t.Fatalf("apply = (%d, %q, %q), want reload success", code, stdout, stderr)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+
+	runner = &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: bootoutCall},
+		{Call: disableCall},
+		{Call: flushCall},
+	}}
+	fixture.deps.Runner = runner
+	stdout, stderr, code = runCLIForTest([]string{"stop"}, fixture.deps)
+	if code != 0 || !strings.Contains(stdout, "stopped") {
+		t.Fatalf("stop = (%d, %q, %q), want stopped", code, stdout, stderr)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(managedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed resolver file after stop: %v, want removed", err)
+	}
+	if data, err := os.ReadFile(foreignPath); err != nil || string(data) != "nameserver 192.0.2.1\n" {
+		t.Fatalf("foreign resolver file = (%q, %v), want unchanged", data, err)
+	}
+}
+
+func TestApplyReportsForeignResolverFile(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 0)
+	resolverDir := t.TempDir()
+	fixture.deps.ResolverDir = resolverDir
+	fixture.deps.FS = &cliFakeFS{}
+	if err := os.WriteFile(filepath.Join(resolverDir, "intra.example"), []byte("nameserver 192.0.2.1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: sysexec.Call{Name: "/test/sing-box", Args: []string{"check", "-c", filepath.Join(fixture.out, "config.json")}}},
+		{Call: printCall, Response: sysexec.Response{Output: []byte("state = exited\n")}},
+		{Call: kickstartCall},
+	}}
+	fixture.deps.Runner = &applyCandidateRunner{Fake: runner, configPath: filepath.Join(fixture.out, "config.json")}
+	stdout, stderr, code := runCLIForTest([]string{"apply"}, fixture.deps)
+	if code != 0 || !strings.Contains(stdout, "not managed by twarp, left as is in "+resolverDir+": intra.example") {
+		t.Fatalf("apply = (%d, %q, %q), want foreign resolver note", code, stdout, stderr)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+}
