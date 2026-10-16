@@ -96,7 +96,7 @@ func TestResolveRejectsRootWithoutSudoUser(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Resolve() with env %v error = nil, want SUDO_USER error", env)
 		}
-		const want = "run via sudo from your user account; SUDO_USER is empty"
+		const want = "run via sudo from your user account or through twarpd; SUDO_USER is empty"
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Resolve() error = %q, want it to contain %q", err, want)
 		}
@@ -159,6 +159,70 @@ func TestSudoOwner(t *testing.T) {
 		if _, _, ok := config.SudoOwner(fakeSys{env: env}); ok {
 			t.Fatalf("SudoOwner(%v) ok = true, want false", env)
 		}
+	}
+}
+
+func TestResolveUsesTWARPOwnerForDaemon(t *testing.T) {
+	t.Parallel()
+
+	users := map[string]*user.User{
+		"alice": {Username: "alice", HomeDir: "/Users/alice"},
+		"bob":   {Username: "bob", HomeDir: "/Users/bob"},
+	}
+	daemon := fakeSys{euid: 0, users: users, env: map[string]string{
+		"HOME": "/var/root", "TWARP_OWNER_UID": "501", "TWARP_OWNER_GID": "20", "TWARP_OWNER_USER": "alice",
+	}}
+	got, err := config.Resolve(daemon)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got.Home != "/Users/alice/.config/twarp" {
+		t.Fatalf("Home = %q, want owner's config directory", got.Home)
+	}
+
+	// sudo wins over the daemon environment.
+	sudo := fakeSys{euid: 0, users: users, env: map[string]string{
+		"SUDO_UID": "502", "SUDO_GID": "20", "SUDO_USER": "bob",
+		"TWARP_OWNER_UID": "501", "TWARP_OWNER_GID": "20", "TWARP_OWNER_USER": "alice",
+	}}
+	got, err = config.Resolve(sudo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got.Home != "/Users/bob/.config/twarp" {
+		t.Fatalf("Home = %q, want sudo user's config directory", got.Home)
+	}
+	owner, ok := config.OwnerFromEnv(sudo)
+	if !ok || owner != (config.Owner{UID: 502, GID: 20, User: "bob"}) {
+		t.Fatalf("OwnerFromEnv(sudo) = (%+v, %t)", owner, ok)
+	}
+}
+
+func TestOwnerFromEnv(t *testing.T) {
+	t.Parallel()
+
+	owner, ok := config.OwnerFromEnv(fakeSys{env: map[string]string{
+		"TWARP_OWNER_UID": "501", "TWARP_OWNER_GID": "20", "TWARP_OWNER_USER": "alice",
+	}})
+	if !ok || owner != (config.Owner{UID: 501, GID: 20, User: "alice"}) {
+		t.Fatalf("OwnerFromEnv(daemon) = (%+v, %t)", owner, ok)
+	}
+	for _, env := range []map[string]string{
+		{},
+		{"TWARP_OWNER_UID": "bad", "TWARP_OWNER_GID": "20"},
+		{"TWARP_OWNER_UID": "501", "TWARP_OWNER_GID": "-1"},
+		{"SUDO_UID": "501"},
+	} {
+		if _, ok := config.OwnerFromEnv(fakeSys{env: env}); ok {
+			t.Fatalf("OwnerFromEnv(%v) ok = true, want false", env)
+		}
+	}
+	// A broken sudo pair falls back to the daemon owner instead of mixing them.
+	owner, ok = config.OwnerFromEnv(fakeSys{env: map[string]string{
+		"SUDO_UID": "bad", "SUDO_GID": "20", "TWARP_OWNER_UID": "501", "TWARP_OWNER_GID": "20",
+	}})
+	if !ok || owner.UID != 501 {
+		t.Fatalf("OwnerFromEnv(broken sudo) = (%+v, %t), want daemon owner", owner, ok)
 	}
 }
 

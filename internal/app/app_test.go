@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tiptop32/twarp/internal/sysexec"
 )
 
 type testSys struct {
@@ -93,6 +95,14 @@ func TestGatewayRefusesRootAndRootActionsRequireIt(t *testing.T) {
 		if err := action(); !errors.Is(err, ErrRootRequired) {
 			t.Errorf("%s as user error = %v, want ErrRootRequired", name, err)
 		}
+	}
+}
+
+func TestApplyNeedsOwnerFromSudoOrDaemon(t *testing.T) {
+	service := New(Deps{Sys: testSys{euid: 0}, Runner: &sysexec.Fake{}, FS: startFakeFS{}}, ActorCLI)
+	_, err := service.Apply(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "through twarpd") {
+		t.Fatalf("Apply without owner error = %v, want twarpd hint", err)
 	}
 }
 
