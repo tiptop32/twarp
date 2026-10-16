@@ -249,11 +249,13 @@ type LiveStatus struct {
 - Create: `internal/socksprobe/socksprobe.go`, `internal/socksprobe/socksprobe_test.go`
 - Modify: `internal/app/status.go`, `internal/app/status_test.go`
 
-- [ ] `socksprobe.Handshake(ctx, conn, creds)`: приветствие, выбор метода, RFC 1929 при методе `02`; ошибки различают «не SOCKS5», «нет общего метода», «auth отклонён»
-- [ ] `socksprobe.Connect(ctx, conn, target)`: CONNECT и разбор кода ответа; `0x03` → `ErrUpstreamDown`
-- [ ] `checkGateway` вызывает `Handshake`; с `StatusOptions.Network` дополнительно `Connect` на `gateway.dns:53`
-- [ ] тесты на `net.Pipe` с фейковым сервером: без auth; с auth (верно/неверно); не-SOCKS ответ; обрыв после `Accept` (сервер закрыл соединение); CONNECT `00` и `03`; таймаут
-- [ ] `make test` зелёный
+- [x] `socksprobe.Handshake(ctx, conn, creds)`: приветствие, выбор метода, RFC 1929 при методе `02`; ошибки различают «не SOCKS5», «нет общего метода», «auth отклонён»
+- [x] `socksprobe.Connect(ctx, conn, target)`: CONNECT и разбор кода ответа; `0x03` → `ErrUpstreamDown`
+- [x] `checkGateway` вызывает `Handshake`; с `StatusOptions.Network` дополнительно `Connect` на `gateway.dns:53`
+- [x] тесты на `net.Pipe` с фейковым сервером: без auth; с auth (верно/неверно); не-SOCKS ответ; обрыв после `Accept` (сервер закрыл соединение); CONNECT `00` и `03`; таймаут
+- [x] ➕ `socksprobe.FakeServer` — минимальный SOCKS5-сервер для тестов (`app`, `cmd/twarp`), по образцу `sysexec.Fake`
+- [x] ➕ сервер только с auth отвечает на no-auth приветствие `0xff`, поэтому подсказка «нужны логин и пароль» даётся на этот ответ
+- [x] `make test` зелёный
 
 ### Task 10: Креды SOCKS-шлюза
 

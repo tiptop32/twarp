@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 
+	"github.com/tiptop32/twarp/internal/config"
+	"github.com/tiptop32/twarp/internal/socksprobe"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
 
@@ -120,4 +123,60 @@ func tunnelCheck(status Status) (Check, bool) {
 		}
 	}
 	return Check{}, false
+}
+
+func runCheckGateway(t *testing.T, dial func() net.Conn, creds *socksprobe.Credentials, network bool) Status {
+	t.Helper()
+	service := New(Deps{Dial: func(context.Context, string, string) (net.Conn, error) { return dial(), nil }}, ActorCLI)
+	cfg := config.Config{Gateway: config.GatewayConfig{Socks: "192.0.2.10:1080", DNS: "100.64.0.53"}}
+	var status Status
+	service.checkGateway(t.Context(), &status, cfg, creds, network)
+	return status
+}
+
+func gatewayCheck(t *testing.T, status Status) Check {
+	t.Helper()
+	for _, check := range status.Checks {
+		if check.Name == "gateway" {
+			return check
+		}
+	}
+	t.Fatalf("no gateway check in %+v", status.Checks)
+	return Check{}
+}
+
+func TestCheckGatewayRunsSOCKSHandshake(t *testing.T) {
+	creds := &socksprobe.Credentials{User: "proxy", Password: "synthetic-password"}
+	closedAfterAccept := func() net.Conn {
+		server, client := net.Pipe()
+		_ = server.Close()
+		return client
+	}
+	tests := []struct {
+		name      string
+		dial      func() net.Conn
+		creds     *socksprobe.Credentials
+		network   bool
+		level     Level
+		detail    string
+		reachable bool
+	}{
+		{"no auth", socksprobe.FakeServer{}.Dial, nil, false, LevelOK, "192.0.2.10:1080 is reachable", true},
+		{"auth", socksprobe.FakeServer{Creds: creds}.Dial, creds, false, LevelOK, "192.0.2.10:1080 is reachable", true},
+		{"port open, not SOCKS", closedAfterAccept, nil, false, LevelFail, "not a SOCKS5 server", false},
+		{"auth required, none configured", socksprobe.FakeServer{Creds: creds}.Dial, nil, false, LevelFail, "probably requires a username and password", false},
+		{"wrong password", socksprobe.FakeServer{Creds: creds}.Dial, &socksprobe.Credentials{User: "proxy", Password: "wrong"}, false, LevelFail, "SOCKS auth rejected", false},
+		{"network: upstream up", socksprobe.FakeServer{}.Dial, nil, true, LevelOK, "connects to 100.64.0.53:53", true},
+		{"network: upstream VPN down", socksprobe.FakeServer{ConnectReply: 0x03}.Dial, nil, true, LevelFail, "192.0.2.10:1080: upstream VPN is down", true},
+		{"network: connect refused", socksprobe.FakeServer{ConnectReply: 0x05}.Dial, nil, true, LevelFail, "CONNECT to 100.64.0.53:53 failed", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status := runCheckGateway(t, tt.dial, tt.creds, tt.network)
+			check := gatewayCheck(t, status)
+			if check.Level != tt.level || !strings.Contains(check.Detail, tt.detail) || status.GatewayReachable != tt.reachable {
+				t.Fatalf("gateway = (%s, %q, reachable %v), want (%s, %q, %v)", check.Level, check.Detail, status.GatewayReachable, tt.level, tt.detail, tt.reachable)
+			}
+		})
+	}
 }

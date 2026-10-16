@@ -17,6 +17,7 @@ import (
 	"github.com/tiptop32/twarp/internal/geo"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/singbox"
+	"github.com/tiptop32/twarp/internal/socksprobe"
 	"github.com/tiptop32/twarp/internal/state"
 	"github.com/tiptop32/twarp/internal/sysexec"
 	"github.com/tiptop32/twarp/internal/uri"
@@ -47,7 +48,8 @@ type Check struct {
 
 // StatusOptions selects optional, slower checks.
 type StatusOptions struct {
-	// Network also compares the public egress address with the vpn server.
+	// Network also compares the public egress address with the vpn server
+	// and sends one CONNECT through the gateway to gateway.dns.
 	Network bool
 }
 
@@ -116,7 +118,7 @@ func (s *Service) Status(ctx context.Context, options StatusOptions) Status {
 	}
 
 	s.checkSingBox(ctx, &status, cfg, secrets)
-	s.checkGateway(ctx, &status, cfg.Gateway.Socks)
+	s.checkGateway(ctx, &status, cfg, nil, options.Network)
 	s.checkTunnel(ctx, &status)
 	checkGatewayCIDRs(&status, paths)
 	checkGeo(&status, paths.GeoDir(), s.now())
@@ -146,22 +148,51 @@ func (s *Service) checkSingBox(ctx context.Context, status *Status, cfg config.C
 	}
 }
 
-func (s *Service) checkGateway(ctx context.Context, status *Status, address string) {
+// checkGateway dials the SOCKS gateway and runs the SOCKS5 handshake, so an
+// unrelated service on the port does not pass. With network it also CONNECTs
+// through the gateway to gateway.dns:53: a gateway that is up while its own
+// upstream (the VPN on the proxy host) is down answers "network unreachable".
+// The periodic probe stays at the handshake: the gateway logs every CONNECT.
+func (s *Service) checkGateway(ctx context.Context, status *Status, cfg config.Config, creds *socksprobe.Credentials, network bool) {
+	address := cfg.Gateway.Socks
 	status.GatewaySocks = address
 	if s.deps.Dial == nil {
 		status.add(LevelFail, "gateway", "TCP dialer is unavailable")
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, statusProbeTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, statusProbeTimeout)
 	defer cancel()
-	connection, err := s.deps.Dial(ctx, "tcp", address)
+	connection, err := s.deps.Dial(probeCtx, "tcp", address)
 	if err != nil {
 		status.add(LevelFail, "gateway", fmt.Sprintf("%s is not reachable: %v", address, err))
 		return
 	}
-	_ = connection.Close()
+	defer func() { _ = connection.Close() }()
+	if err := socksprobe.Handshake(probeCtx, connection, creds); err != nil {
+		status.add(LevelFail, "gateway", fmt.Sprintf("%s: %v", address, err))
+		return
+	}
 	status.GatewayReachable = true
-	status.add(LevelOK, "gateway", address+" is reachable")
+	if !network {
+		status.add(LevelOK, "gateway", address+" is reachable")
+		return
+	}
+	dns, err := netip.ParseAddr(cfg.Gateway.DNS)
+	if err != nil {
+		status.add(LevelFail, "gateway", fmt.Sprintf("gateway.dns %q is not an IP address", cfg.Gateway.DNS))
+		return
+	}
+	target := netip.AddrPortFrom(dns, 53)
+	connectCtx, cancelConnect := context.WithTimeout(ctx, egressProbeTimeout)
+	defer cancelConnect()
+	switch err := socksprobe.Connect(connectCtx, connection, target); {
+	case err == nil:
+		status.add(LevelOK, "gateway", fmt.Sprintf("%s is reachable and connects to %s", address, target))
+	case errors.Is(err, socksprobe.ErrUpstreamDown):
+		status.add(LevelFail, "gateway", address+": upstream VPN is down")
+	default:
+		status.add(LevelFail, "gateway", fmt.Sprintf("%s is reachable, but CONNECT to %s failed: %v", address, target, err))
+	}
 }
 
 func (s *Service) checkTunnel(ctx context.Context, status *Status) {

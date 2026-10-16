@@ -16,6 +16,7 @@ import (
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/socksprobe"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
 
@@ -324,9 +325,7 @@ func newStatusFixture(t *testing.T, clashStatus int) statusFixture {
 			HTTPClient: client,
 			Now:        func() time.Time { return now },
 			Dial: func(context.Context, string, string) (net.Conn, error) {
-				server, client := net.Pipe()
-				_ = server.Close()
-				return client, nil
+				return socksprobe.FakeServer{}.Dial(), nil
 			},
 		},
 		runner: runner,
@@ -373,5 +372,20 @@ func TestRunStatusMissingSecretsKeepsOtherChecks(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout = %q, want %q", stdout, want)
 		}
+	}
+}
+
+// A port that accepts and closes is not a SOCKS gateway: the probe must not
+// report it as reachable.
+func TestRunStatusRejectsNonSOCKSGateway(t *testing.T) {
+	fixture := newStatusFixture(t, http.StatusOK)
+	fixture.deps.Dial = func(context.Context, string, string) (net.Conn, error) {
+		server, client := net.Pipe()
+		_ = server.Close()
+		return client, nil
+	}
+	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
+	if code != 1 || !strings.Contains(stdout, "FAIL gateway: 192.0.2.10:1080: not a SOCKS5 server") {
+		t.Fatalf("status = (%d, %q), want SOCKS failure", code, stdout)
 	}
 }
