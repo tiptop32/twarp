@@ -101,7 +101,11 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 		{name: "missing socks", yaml: strings.Replace(validConfig(), "  socks: 192.168.1.10:1080\n", "", 1), wantError: "gateway.socks is required"},
 		{name: "socks without port", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1.10", 1), wantError: "gateway.socks must be host:port"},
 		{name: "socks invalid port", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1.10:70000", 1), wantError: "gateway.socks must be host:port"},
-		{name: "socks hostname", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "proxy.example.com:1080", 1), wantError: "gateway.socks host must be an IP address"},
+		{name: "socks bad hostname", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "proxy_host.example:1080", 1), wantError: "gateway.socks host must be an IP address or a host name"},
+		{name: "socks with scheme", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "\"socks5://proxy.example:1080\"", 1), wantError: "gateway.socks"},
+		{name: "socks truncated address", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1:1080", 1), wantError: "gateway.socks host must be an IP address or a host name"},
+		{name: "socks multicast", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "224.0.0.251:1080", 1), wantError: "multicast"},
+		{name: "socks label with hyphen edge", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "-proxy.local:1080", 1), wantError: "host name"},
 		{name: "missing DNS", yaml: strings.Replace(validConfig(), "  dns: 100.64.0.53\n", "", 1), wantError: "gateway.dns is required"},
 		{name: "non-IP DNS", yaml: strings.Replace(validConfig(), "100.64.0.53", "dns.example", 1), wantError: "gateway.dns must be an IP address"},
 		{name: "invalid domain", yaml: strings.Replace(validConfig(), "intra.example", "-bad.example", 1), wantError: "gateway.domains"},
@@ -209,5 +213,17 @@ func TestSecretsGatewayAuthMustBeAPair(t *testing.T) {
 	}
 	if err := config.ValidateGatewayAuth("", ""); err != nil {
 		t.Fatalf("no credentials must be valid, got %v", err)
+	}
+}
+
+func TestLoadAcceptsGatewaySOCKSHostNames(t *testing.T) {
+	t.Parallel()
+
+	for _, address := range []string{"proxyhost.local:8080", "proxy.example:1080", "proxyhost:8080", "[2001:db8::10]:1080", "127.0.0.1:1080"} {
+		path := writeFile(t, "twarp.yaml", 0o600, strings.Replace(validConfig(), "192.168.1.10:1080", `"`+address+`"`, 1))
+		cfg, err := config.Load(path)
+		if err != nil || cfg.Gateway.Socks != address {
+			t.Fatalf("Load(%s) = (%q, %v), want accepted as is", address, cfg.Gateway.Socks, err)
+		}
 	}
 }

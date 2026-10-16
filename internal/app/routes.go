@@ -48,7 +48,7 @@ type Routes struct {
 }
 
 // Routes loads config and gateway state and describes the routing.
-func (s *Service) Routes(context.Context) (Routes, error) {
+func (s *Service) Routes(ctx context.Context) (Routes, error) {
 	paths, err := config.Resolve(s.deps.Sys)
 	if err != nil {
 		return Routes{}, err
@@ -61,7 +61,11 @@ func (s *Service) Routes(context.Context) (Routes, error) {
 	if err != nil {
 		return Routes{}, err
 	}
-	rules, err := render.RouteRules(cfg)
+	socks, err := s.GatewaySOCKS(ctx, cfg)
+	if err != nil {
+		return Routes{}, err
+	}
+	rules, err := render.RouteRules(cfg, socks)
 	if err != nil {
 		return Routes{}, err
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/gwaddr"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/singbox"
@@ -127,12 +128,18 @@ func (s *Service) GeoUpdate(ctx context.Context) (geo.Report, error) {
 
 // RenderInputs loads config, secrets and gateway state and renders the
 // production sing-box config.
-func (s *Service) RenderInputs() (config.Paths, []netip.Prefix, []byte, error) {
-	paths, _, prefixes, data, err := s.renderInputs()
+func (s *Service) RenderInputs(ctx context.Context) (config.Paths, []netip.Prefix, []byte, error) {
+	paths, _, prefixes, data, err := s.renderInputs(ctx)
 	return paths, prefixes, data, err
 }
 
-func (s *Service) renderInputs() (config.Paths, config.Config, []netip.Prefix, []byte, error) {
+// GatewaySOCKS resolves gateway.socks: an IP literal as is, a host name to
+// its first IPv4 address through the system resolver (see gwaddr).
+func (s *Service) GatewaySOCKS(ctx context.Context, cfg config.Config) (netip.AddrPort, error) {
+	return gwaddr.Resolve(ctx, s.deps.LookupIP, cfg.Gateway.Socks)
+}
+
+func (s *Service) renderInputs(ctx context.Context) (config.Paths, config.Config, []netip.Prefix, []byte, error) {
 	paths, err := config.Resolve(s.deps.Sys)
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
@@ -149,7 +156,11 @@ func (s *Service) renderInputs() (config.Paths, config.Config, []netip.Prefix, [
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
 	}
-	data, err := render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN})
+	socks, err := s.GatewaySOCKS(ctx, cfg)
+	if err != nil {
+		return config.Paths{}, config.Config{}, nil, nil, err
+	}
+	data, err := render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN, GatewaySocks: socks})
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
 	}
@@ -187,7 +198,7 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		release()
 		return "", s.failApply(fmt.Errorf("read installed gateway rule-set: %w", readErr))
 	}
-	paths, cfg, prefixes, data, err := s.renderInputs()
+	paths, cfg, prefixes, data, err := s.renderInputs(ctx)
 	if err != nil {
 		release()
 		return "", s.failApply(err)

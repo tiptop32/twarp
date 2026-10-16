@@ -178,6 +178,47 @@ func SaveSecrets(path string, secrets Secrets) error {
 	return nil
 }
 
+// validateGatewayHost accepts an IP literal or a DNS host name (RFC 1123
+// labels, e.g. proxyhost.local). Names are resolved at apply time and again
+// by twarpd on network changes; literals are used as is. Loopback stays
+// allowed for local test gateways.
+func validateGatewayHost(host string) error {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if addr.IsUnspecified() || addr.IsMulticast() {
+			return errors.New("gateway.socks host must not be an unspecified or multicast address")
+		}
+		return nil
+	}
+	if !validHostName(host) {
+		return errors.New("gateway.socks host must be an IP address or a host name such as proxyhost.local")
+	}
+	return nil
+}
+
+func validHostName(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	allNumeric := true
+	for label := range strings.SplitSeq(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			switch {
+			case r >= '0' && r <= '9':
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '-':
+				allNumeric = false
+			default:
+				return false
+			}
+		}
+	}
+	// "192.168.1" is a mistyped address, not a name
+	return !allNumeric
+}
+
 func defaultRawConfig() rawConfig {
 	var raw rawConfig
 	raw.Gateway.AllowedRanges = []string{"100.64.0.0/10"}
@@ -197,8 +238,8 @@ func validateConfig(raw rawConfig) (Config, error) {
 		return Config{}, errors.New("gateway.socks must be host:port with a port from 1 to 65535")
 	}
 	gatewaySocksHost, _, _ := net.SplitHostPort(raw.Gateway.Socks)
-	if _, err := netip.ParseAddr(gatewaySocksHost); err != nil {
-		return Config{}, errors.New("gateway.socks host must be an IP address")
+	if err := validateGatewayHost(gatewaySocksHost); err != nil {
+		return Config{}, err
 	}
 	if len(raw.Gateway.Domains) == 0 {
 		return Config{}, errors.New("gateway.domains is required and must not be empty")

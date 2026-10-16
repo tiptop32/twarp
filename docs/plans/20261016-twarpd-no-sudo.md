@@ -160,12 +160,14 @@ type LiveStatus struct {
 - Modify: `internal/render/render.go`, `internal/render/render_test.go` (+ golden)
 - Modify: `internal/app/lifecycle.go` (`renderInputs`)
 
-- [ ] валидация: хост `gateway.socks` — IP или DNS-имя (RFC 1123 метки, без схемы и пути); IP по-прежнему проверяется против loopback/multicast
-- [ ] `gwaddr.Resolve(ctx, lookup, hostport) (netip.AddrPort, error)`: IP-литерал без сети; имя → первый IPv4; ответ без IPv4 — ошибка `no IPv4 address`; отказ на loopback/unspecified результат; таймаут 5 с
-- [ ] `render.Options.GatewaySocks netip.AddrPort`; outbound `gateway` и правило `ip_cidr → direct` строятся из него; порядок маршрутов не меняется
-- [ ] `renderInputs` резолвит через `Deps.LookupIP`
-- [ ] тесты: таблица валидации (IP, IPv6 в скобках, `.local`, мусор, схема), резолв (ответ mDNS `[fe80::…, 192.0.2.10]` → `192.0.2.10`; только link-local → ошибка; только глобальный v6 → ошибка `no IPv4 address`; пусто; таймаут; loopback), golden рендера с адресом из резолвера, тест порядка маршрутов
-- [ ] `make test` зелёный
+- [x] валидация: хост `gateway.socks` — IP или DNS-имя (RFC 1123 метки, без схемы и пути); IP по-прежнему проверяется против loopback/multicast
+- [x] `gwaddr.Resolve(ctx, lookup, hostport) (netip.AddrPort, error)`: IP-литерал без сети; имя → первый IPv4; ответ без IPv4 — ошибка `no IPv4 address`; отказ на loopback/unspecified результат; таймаут 5 с
+- [x] `render.Options.GatewaySocks netip.AddrPort`; outbound `gateway` и правило `ip_cidr → direct` строятся из него; порядок маршрутов не меняется
+- [x] `renderInputs` резолвит через `Deps.LookupIP`
+- [x] тесты: таблица валидации (IP, IPv6 в скобках, `.local`, мусор, схема), резолв (ответ mDNS `[fe80::…, 192.0.2.10]` → `192.0.2.10`; только link-local → ошибка; только глобальный v6 → ошибка `no IPv4 address`; пусто; таймаут; loopback), golden рендера с адресом из резолвера, тест порядка маршрутов
+- [x] ➕ IP-литерал: отвергаются unspecified и multicast; loopback оставлен (интеграционные тесты гоняют шлюз на `127.0.0.1`)
+- [x] ➕ `render.Options.GatewaySocks` без значения — fallback на IP-литерал из конфига (имя без резолва → ошибка «resolved first»); так `itest` и тесты рендера не меняются. `RouteRules(cfg, socks)`, `Gateway()` и `Routes()` тоже резолвят имя через `Service.GatewaySOCKS`
+- [x] `make test` зелёный
 
 ### Task 3: IPC: протокол, сервер с проверкой peer uid, клиент
 
