@@ -301,16 +301,16 @@ type LiveStatus struct {
 
 ### Task 12: Verify acceptance criteria
 
-- [ ] каждое требование из Overview проверено тестом или ручным шагом из Post-Completion
-- [ ] порядок маршрутов и инварианты sing-box 1.14+ подтверждены тестами рендера
-- [ ] `make test`, `make lint`, `make integration`, `make eval`, `make secrets-check`
-- [ ] grep по диффу: нет реальных IP/доменов, только `example`, `100.64.0.0/10`, TEST-NET
+- [x] каждое требование из Overview проверено тестом или ручным шагом из Post-Completion
+- [x] порядок маршрутов и инварианты sing-box 1.14+ подтверждены тестами рендера
+- [x] `make test`, `make lint` (и `GOOS=darwin`), `make secrets-check` — зелёные; `make integration` и `make eval` — та же матрица, что на базовом коммите: ⚠️ в Linux-контейнере `mcp_tool_choice` требует CLI `claude`, `launchd_geo` от пользователя — sudo, `gateway_state_recovery` — не-root, `config_deployment` — root; регрессий нет
+- [x] grep по диффу: нет реальных IP/доменов, только `example`, `100.64.0.0/10`, TEST-NET
 
 ### Task 13: [Final] Update documentation
 
-- [ ] README: быстрый старт (`sudo twarp install` один раз, затем `twarp up/down`), `gateway.socks` по имени (только IPv4), раздел «Как работает twarpd» (сокет, peer uid, что демон может и не может), команды (`twarp gateway auth`), клавиши TUI, что проверяет проба шлюза
-- [ ] CLAUDE.md: правило «операции под root идут через `app.Service`; демон не принимает аргументов от клиента»
-- [ ] переместить план в `docs/plans/completed/`
+- [x] README: быстрый старт (`sudo twarp install` один раз, затем `twarp up/down`), `gateway.socks` по имени (только IPv4), раздел «Как работает twarpd» (сокет, peer uid, что демон может и не может), команды (`twarp gateway auth`), клавиши TUI, что проверяет проба шлюза
+- [x] CLAUDE.md: правило «операции под root идут через `app.Service`; демон не принимает аргументов от клиента»
+- [x] переместить план в `docs/plans/completed/`
 
 ## Post-Completion
 
