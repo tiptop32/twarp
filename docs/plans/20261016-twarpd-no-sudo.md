@@ -147,10 +147,10 @@ type LiveStatus struct {
 - Modify: `internal/config/paths_test.go`
 - Modify: `internal/app/lifecycle.go`
 
-- [ ] добавить `config.Owner(sys) (uid, gid int, user string, ok bool)`: сначала `SUDO_UID/GID/USER`, затем `TWARP_OWNER_UID/GID/USER`; `SudoOwner` оставить обёрткой
-- [ ] перевести `resolveHome` и `Apply` на `Owner`; текст ошибки без владельца: «run via sudo or through twarpd»
-- [ ] тесты: `SUDO_*` приоритетнее `TWARP_OWNER_*`; только `TWARP_OWNER_*` под root даёт home владельца; пусто под root → ошибка; невалидные числа → `ok=false`
-- [ ] `make test` зелёный
+- [x] добавить `config.Owner(sys) (uid, gid int, user string, ok bool)`: сначала `SUDO_UID/GID/USER`, затем `TWARP_OWNER_UID/GID/USER`; `SudoOwner` оставить обёрткой
+- [x] перевести `resolveHome` и `Apply` на `Owner`; текст ошибки без владельца: «run via sudo or through twarpd»
+- [x] тесты: `SUDO_*` приоритетнее `TWARP_OWNER_*`; только `TWARP_OWNER_*` под root даёт home владельца; пусто под root → ошибка; невалидные числа → `ok=false`
+- [x] `make test` зелёный
 
 ### Task 2: gateway.socks по имени и резолвер адреса
 

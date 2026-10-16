@@ -166,9 +166,9 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 	if s.deps.Runner == nil || s.deps.FS == nil {
 		return "", errors.New("dependencies are incomplete")
 	}
-	uid, gid, ok := config.SudoOwner(s.deps.Sys)
+	uid, gid, _, ok := config.Owner(s.deps.Sys)
 	if !ok {
-		return "", fmt.Errorf("%w: SUDO_UID and SUDO_GID are required", ErrRootRequired)
+		return "", fmt.Errorf("%w: run via sudo or through twarpd (SUDO_UID/SUDO_GID or TWARP_OWNER_UID/TWARP_OWNER_GID are required)", ErrRootRequired)
 	}
 
 	resolved, err := config.Resolve(s.deps.Sys)
