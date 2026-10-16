@@ -174,14 +174,15 @@ type LiveStatus struct {
 ### Task 3: IPC: протокол, сервер с проверкой peer uid, клиент
 
 **Files:**
-- Create: `internal/ipc/protocol.go`, `internal/ipc/server.go`, `internal/ipc/peercred_darwin.go`, `internal/ipc/peercred_other.go`, `internal/ipc/client.go`
+- Create: `internal/ipc/protocol.go`, `internal/ipc/server.go`, `internal/ipc/peercred_darwin.go`, `internal/ipc/peercred_linux.go` (➕ ревью 7), `internal/ipc/peercred_other.go`, `internal/ipc/client.go`
 - Create: `internal/ipc/ipc_test.go`
 
-- [ ] типы `Request`/`Response`/`LiveStatus`, версия 1, список операций и акторов
-- [ ] сервер: `Listen(path, allowedUIDs, handler)`; создаёт каталог `0755`, удаляет устаревший сокет, `chmod 0666`; на соединение `GetsockoptXucred` → uid вне списка получает `forbidden`; лимит 4 KiB, один запрос на соединение
-- [ ] клиент: `Call(ctx, path, req)`; `ErrDaemonUnavailable` при отсутствии сокета или `ECONNREFUSED`
-- [ ] тесты на реальном сокете в `t.TempDir()`: успешный вызов; uid не в списке → forbidden (список без `os.Getuid()`); неизвестная операция и версия; слишком длинный запрос; устаревший файл сокета перезаписывается; клиент без демона → `ErrDaemonUnavailable`
-- [ ] `make test` зелёный
+- [x] типы `Request`/`Response`/`LiveStatus`, версия 1, список операций и акторов
+- [x] сервер: `Listen(path, allowedUIDs, handler)`; создаёт каталог `0755`, удаляет устаревший сокет, `chmod 0666`; на соединение `GetsockoptXucred` → uid вне списка получает `forbidden`; лимит 4 KiB, один запрос на соединение
+- [x] клиент: `Call(ctx, path, req)`; `ErrDaemonUnavailable` при отсутствии сокета или `ECONNREFUSED`
+- [x] тесты на реальном сокете в `t.TempDir()`: успешный вызов; uid не в списке → forbidden (список без `os.Getuid()`); неизвестная операция и версия; слишком длинный запрос; устаревший файл сокета перезаписывается; клиент без демона → `ErrDaemonUnavailable`
+- [x] ➕ (ревью 6, 8) поле `actor` (`cli`/`tui`); дедлайн чтения 5 с, не больше 8 соединений (лишним `busy`); неизвестные поля запроса отклоняются; файл на месте сокета, который не сокет, не удаляется
+- [x] `make test` зелёный
 
 ### Task 4: netwatch: события смены сети
 
