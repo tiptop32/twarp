@@ -10,11 +10,13 @@
 - Ежедневных команд три: `twarp up`, `twarp down`, `twarp` (без аргументов открывает TUI).
 - `gateway.socks` принимает имя хоста (`proxyhost.local:8080`). При смене сети демон сам резолвит имя заново и, если адрес сменился, перегенерирует конфиг и перезагружает sing-box.
 - `twarp status` и TUI показывают адрес шлюза, на котором реально работает sing-box, и предупреждают, если `twarp.yaml` или `secrets.yaml` новее работающего конфига.
+- Проба шлюза проверяет SOCKS5-рукопожатие, а не только открытый TCP-порт; `--net` и клавиша `n` дополнительно проверяют путь через шлюз до `gateway.dns`.
+- SOCKS-шлюз может требовать логин и пароль: они хранятся в `secrets.yaml` и попадают в outbound `gateway`.
 
 Измеримый результат:
 
 - число вводов пароля в день: с «каждое вкл/выкл/apply» до 0;
-- смена Wi-Fi при `gateway.socks` по имени: 0 ручных действий, переключение за ≤ 10 с (строка `gateway address changed old=… new=…` в `/usr/local/var/log/twarp/twarpd.log` и запись в root audit log);
+- смена Wi-Fi при `gateway.socks` по имени: 0 ручных действий, новый адрес в работающем `config.json` за ≤ 10 с (строка `gateway address changed old=… new=…` в `/usr/local/var/log/twarp/twarpd.log` и запись в root audit log). Сквозная работа шлюза после смены сети этим не ограничена: прокси-хосту нужно ещё переподключить свой VPN и заново найти LAN (см. «Связка с прокси-хостом»), это может занять минуты;
 - ложный `OK gateway` при устаревшем конфиге невозможен: на этот сценарий есть тест.
 
 ## Context (from discovery)
@@ -26,7 +28,19 @@
 - `internal/render/render.go`: `parseGatewaySOCKS` берёт IP из конфига для outbound `gateway` и для правила `ip_cidr → direct` (правило 3 в порядке маршрутов).
 - `internal/launchd/`: plist для `dev.twarp.singbox` и `dev.twarp.geo`, `Install`/`Uninstall`.
 - `cmd/twarp/cmd_tui.go`: `SudoCommand` сворачивает TUI и запускает тот же бинарь через `sudo` для `s`/`a`/`u`; проверяет, что бинарь и каталоги над ним принадлежат root.
+- `internal/app/status.go:checkGateway`: проба — `Dial` + `Close` без данных. На прокси-хосте это видно как `SYN → SYN-ACK → ACK → FIN` каждые 5 с (TUI, `tuiStatusInterval`); проба отвечает OK любому открытому порту.
+- `internal/config/config.go:Secrets`: `vpn_uri`, `clash_secret`; места для кредов SOCKS-шлюза нет. `singbox.Outbound` не имеет `username`/`password`.
 - Зависимости уже в `go.mod`: `golang.org/x/sys/unix` (`GetsockoptXucred` для `LOCAL_PEERCRED` на darwin), `golang.org/x/net/route` (разбор сообщений routing socket). Новых модулей не нужно.
+
+### Связка с прокси-хостом
+
+Типовой шлюз — cisco-socks-server на маке в той же LAN (план `20261016-lan-client-autodiscovery.md` в его репозитории). Что из этого следует здесь:
+
+- Его LAN-листенер только IPv4 (`tcp4` с `IP_BOUND_IF`). IPv6-адрес прокси-хоста не подключится, поэтому резолвер имени берёт только IPv4 (решение 7).
+- Прокси-хост сам находит клиента через ARP при смене сети и требует SOCKS-аутентификацию для такого автообнаружения; пока его VPN не поднят, CONNECT получает `network unreachable` (0x03).
+- Периодическая проба шлюза служит прокси-хосту keepalive (обновляет его реестр клиентов). Поэтому периодическая проба остаётся лёгкой: только рукопожатие, без CONNECT, чтобы не засорять его лог `connection to …`.
+- DNS шлюза идёт `type: tcp` через detour `gateway`, а cisco-socks-server исходит из того, что корпоративный DNS за туннелем принимает только UDP. ⚠️ Проверить на живом VPN (Post-Completion); если TCP не работает, понадобится отдельная задача.
+- Формат строк о смене адреса одинаков на обеих сторонах: `old=… new=…`.
 
 ## Development Approach
 
@@ -69,12 +83,14 @@ twarp status ────────┘  twarpd.sock ── twarpd┼─ netwat
 4. **Протокол без аргументов.** Одна строка JSON на запрос и на ответ: `{"v":1,"op":"up"}`. Операции фиксированы: `up`, `down`, `apply`, `geo_update`, `status`. Никаких путей и данных от клиента, поэтому поверхность атаки не шире, чем «владелец может включить и выключить свой VPN». Неизвестная версия или операция → ошибка.
 5. **Операции сериализуются.** Один mutex в демоне: `up`, сетевое переприменение и `apply` не идут параллельно.
 6. **Смена сети без cgo.** `netwatch` читает `AF_ROUTE` сокет (`RTM_NEWADDR`, `RTM_DELADDR`, `RTM_IFINFO`, `RTM_ADD`/`RTM_DELETE` для default), сглаживает пачку событий (debounce 2 с) и дополнительно тикает раз в 30 с на случай пропущенных событий. На каждое срабатывание демон резолвит хост `gateway.socks`; если IP отличается от адреса в работающем конфиге, вызывает `Apply`. IP-литерал в yaml не резолвится, и переприменение не запускается.
-7. **Резолв выбирает IPv4.** Если имя вернуло несколько адресов, берётся первый IPv4 (как `dns.strategy: prefer_ipv4`), иначе первый глобальный или ULA IPv6. Link-local (`fe80::/10`) отбрасывается: mDNS отдаёт его первым, а без зоны интерфейса sing-box не подключится. Ошибка резолва не трогает работающий конфиг: пишется в лог и в status (`WARN gateway: proxyhost.local не резолвится, работаю на 192.0.2.10`).
+7. **Резолв берёт только IPv4.** Если имя вернуло несколько адресов, берётся первый IPv4 (как `dns.strategy: prefer_ipv4`). IPv6-ответы не используются: mDNS отдаёт первым link-local (`fe80::/10`), без зоны интерфейса sing-box к нему не подключится, а типовой шлюз (cisco-socks-server) слушает только IPv4, так что глобальный IPv6 сменил бы понятную ошибку резолва на таймаут коннекта. Ответ без IPv4 — ошибка резолва `no IPv4 address for <host>`. IPv6-литерал в yaml по-прежнему допустим и не резолвится. Ошибка резолва не трогает работающий конфиг: пишется в лог и в status (`WARN gateway: proxyhost.local не резолвится, работаю на 192.0.2.10`).
    - Резолвер только системный (`net.DefaultResolver` в режиме по умолчанию: на darwin он идёт через libSystem и mDNSResponder и с cgo, и без). Чистый Go-резолвер (`GODEBUG=netdns=go`) спрашивает DNS роутера и `.local` не видит: тест фиксирует, что демон не выставляет `netdns=go`.
    - Несуществующее `.local`-имя отвечает таймаутом через 5 с, а не мгновенной ошибкой. Резолв идёт с таймаутом 5 с вне mutex операций, чтобы `twarp up`/`down` не ждали сетевой проверки.
 8. **Рендер получает готовый адрес.** `render.Options.GatewaySocks netip.AddrPort` заполняется в `app.renderInputs`; `render` больше не парсит хост из конфига. Правило `ip_cidr <socks>/32 → direct` остаётся третьим.
 9. **Честный status.** Демон отвечает на `status` адресом шлюза из работающего `config.json` и его mtime. Без демона CLI сравнивает mtime `twarp.yaml`/`secrets.yaml` с `stat` на `/usr/local/etc/twarp/config.json` (stat доступен без root). Проверка доступности шлюза идёт по живому адресу.
-10. **Команды.** `twarp up`: если не установлено, просит один раз `sudo twarp install` и выходит; иначе через сокет `apply` + `start`. `twarp down`: через сокет `stop`. `twarp` без аргументов: TUI, если stdout — терминал, иначе usage. `start`/`stop`/`apply`/`geo update` без sudo идут через сокет; под sudo работают напрямую, как сейчас.
+10. **Проба шлюза — SOCKS5-рукопожатие.** `checkGateway` после `Dial` отправляет приветствие (`05 01 00` без кредов, `05 02 00 02` с кредами), ждёт `05 <метод>`; при методе `02` проходит RFC 1929 и ждёт статус `00`. Итог: `OK` / `FAIL: not a SOCKS5 server` / `FAIL: SOCKS auth rejected`. Глубокая проба только по запросу (`twarp status --net`, клавиша `n`): CONNECT через шлюз на `gateway.dns:53`; ответ `0x03` показывается как `gateway: upstream VPN is down`. Периодически CONNECT не делается.
+11. **Креды SOCKS-шлюза.** `secrets.yaml` получает необязательные `gateway_socks_user` и `gateway_socks_password` (только парой). `render` добавляет их в outbound `gateway` (`username`/`password` sing-box), `twarp render` без `--out` маскирует пароль, как остальные секреты. Ввод — `twarp gateway auth` из stdin (как `twarp import`), не из аргументов командной строки.
+12. **Команды.** `twarp up`: если не установлено, просит один раз `sudo twarp install` и выходит; иначе через сокет `apply` + `start`. `twarp down`: через сокет `stop`. `twarp` без аргументов: TUI, если stdout — терминал, иначе usage. `start`/`stop`/`apply`/`geo update` без sudo идут через сокет; под sudo работают напрямую, как сейчас.
 
 Отвергнуто:
 
@@ -122,7 +138,7 @@ type LiveStatus struct {
 
 ## Implementation Steps
 
-Волны для `plan-dispatch`: задачи 1–4 независимы и идут параллельно; 5 после 1–3; 6 после 5; 7 после 3 и 6; 8 после 7; 9–10 в конце.
+Волны для `plan-dispatch`: задачи 1–4, 9 и 10 независимы и идут параллельно; 5 после 1–3; 6 после 5; 7 после 3 и 6; 8 после 7 и 9; 11–13 в конце.
 
 ### Task 1: Владелец без sudo в config
 
@@ -145,10 +161,10 @@ type LiveStatus struct {
 - Modify: `internal/app/lifecycle.go` (`renderInputs`)
 
 - [ ] валидация: хост `gateway.socks` — IP или DNS-имя (RFC 1123 метки, без схемы и пути); IP по-прежнему проверяется против loopback/multicast
-- [ ] `gwaddr.Resolve(ctx, lookup, hostport) (netip.AddrPort, error)`: IP-литерал без сети; имя → первый IPv4, иначе первый не-link-local IPv6; отказ на loopback/unspecified/link-local результат; таймаут 5 с
+- [ ] `gwaddr.Resolve(ctx, lookup, hostport) (netip.AddrPort, error)`: IP-литерал без сети; имя → первый IPv4; ответ без IPv4 — ошибка `no IPv4 address`; отказ на loopback/unspecified результат; таймаут 5 с
 - [ ] `render.Options.GatewaySocks netip.AddrPort`; outbound `gateway` и правило `ip_cidr → direct` строятся из него; порядок маршрутов не меняется
 - [ ] `renderInputs` резолвит через `Deps.LookupIP`
-- [ ] тесты: таблица валидации (IP, IPv6 в скобках, `.local`, мусор, схема), резолв (ответ mDNS `[fe80::…, 192.0.2.10]` → `192.0.2.10`; только link-local → ошибка; только глобальный v6; пусто; таймаут; loopback), golden рендера с адресом из резолвера, тест порядка маршрутов
+- [ ] тесты: таблица валидации (IP, IPv6 в скобках, `.local`, мусор, схема), резолв (ответ mDNS `[fe80::…, 192.0.2.10]` → `192.0.2.10`; только link-local → ошибка; только глобальный v6 → ошибка `no IPv4 address`; пусто; таймаут; loopback), golden рендера с адресом из резолвера, тест порядка маршрутов
 - [ ] `make test` зелёный
 
 ### Task 3: IPC: протокол, сервер с проверкой peer uid, клиент
@@ -227,7 +243,33 @@ type LiveStatus struct {
 - [ ] тесты: сценарий 2026-10-16 (yaml `.173`, живой `.105`) даёт FAIL/WARN, а не OK; mtime-fallback; TUI-действия вызывают фейковый клиент; fallback на sudo при `ErrDaemonUnavailable`
 - [ ] `make test` зелёный
 
-### Task 9: Интеграционный сценарий смены адреса
+### Task 9: Проба шлюза через SOCKS5-рукопожатие
+
+**Files:**
+- Create: `internal/socksprobe/socksprobe.go`, `internal/socksprobe/socksprobe_test.go`
+- Modify: `internal/app/status.go`, `internal/app/status_test.go`
+
+- [ ] `socksprobe.Handshake(ctx, conn, creds)`: приветствие, выбор метода, RFC 1929 при методе `02`; ошибки различают «не SOCKS5», «нет общего метода», «auth отклонён»
+- [ ] `socksprobe.Connect(ctx, conn, target)`: CONNECT и разбор кода ответа; `0x03` → `ErrUpstreamDown`
+- [ ] `checkGateway` вызывает `Handshake`; с `StatusOptions.Network` дополнительно `Connect` на `gateway.dns:53`
+- [ ] тесты на `net.Pipe` с фейковым сервером: без auth; с auth (верно/неверно); не-SOCKS ответ; обрыв после `Accept` (сервер закрыл соединение); CONNECT `00` и `03`; таймаут
+- [ ] `make test` зелёный
+
+### Task 10: Креды SOCKS-шлюза
+
+**Files:**
+- Modify: `internal/config/config.go`, `internal/config/config_test.go`
+- Modify: `internal/singbox/types.go`, `internal/render/render.go`, `internal/render/render_test.go` (+ golden)
+- Create: `cmd/twarp/cmd_gateway_auth.go` (или подкоманда в `cmd_gateway.go`) + тест
+
+- [ ] `Secrets.GatewaySocksUser`/`GatewaySocksPassword`, валидация «только парой»
+- [ ] `singbox.Outbound.Username`/`Password` (`omitempty`); `render` заполняет их для `gateway`
+- [ ] маскирование пароля в выводе `twarp render`
+- [ ] `twarp gateway auth`: читает `user` и `password` из stdin, сохраняет `secrets.yaml` (`0600`); `--clear` удаляет; не под sudo
+- [ ] тесты: golden с синтетическими кредами; без кредов outbound не меняется; маскирование; только user → ошибка; ввод из stdin
+- [ ] `make test` зелёный
+
+### Task 11: Интеграционный сценарий смены адреса
 
 **Files:**
 - Create: `internal/itest/daemon_test.go`
@@ -238,16 +280,16 @@ type LiveStatus struct {
 - [ ] запрос с чужим uid невозможно сымитировать без root: тест помечен `skip` с причиной, проверка остаётся в юнит-тестах Task 3
 - [ ] `make integration` зелёный
 
-### Task 10: Verify acceptance criteria
+### Task 12: Verify acceptance criteria
 
 - [ ] каждое требование из Overview проверено тестом или ручным шагом из Post-Completion
 - [ ] порядок маршрутов и инварианты sing-box 1.14+ подтверждены тестами рендера
 - [ ] `make test`, `make lint`, `make integration`, `make eval`, `make secrets-check`
 - [ ] grep по диффу: нет реальных IP/доменов, только `example`, `100.64.0.0/10`, TEST-NET
 
-### Task 11: [Final] Update documentation
+### Task 13: [Final] Update documentation
 
-- [ ] README: быстрый старт (`sudo twarp install` один раз, затем `twarp up/down`), `gateway.socks` по имени, раздел «Как работает twarpd» (сокет, peer uid, что демон может и не может), команды, клавиши TUI
+- [ ] README: быстрый старт (`sudo twarp install` один раз, затем `twarp up/down`), `gateway.socks` по имени (только IPv4), раздел «Как работает twarpd» (сокет, peer uid, что демон может и не может), команды (`twarp gateway auth`), клавиши TUI, что проверяет проба шлюза
 - [ ] CLAUDE.md: правило «операции под root идут через `app.Service`; демон не принимает аргументов от клиента»
 - [ ] переместить план в `docs/plans/completed/`
 
@@ -258,6 +300,11 @@ type LiveStatus struct {
 **Ручная проверка:**
 - `make install && sudo twarp install`, затем `twarp down`/`twarp up` без пароля; `ls -l /var/run/twarp/twarpd.sock`.
 - `gateway.socks: <имя прокси-хоста>.local:8080`, `twarp apply`; переключить Wi-Fi на другую сеть с тем же прокси-хостом: в `twarpd.log` строка `gateway address changed`, `twarp status` показывает новый live-адрес за ≤ 10 с, `curl` до домена шлюза работает.
+- Сквозной сценарий смены Wi-Fi с cisco-socks-server: засечь время от смены сети до работающего `curl` к домену шлюза; ожидаемо его определяет реконнект VPN на прокси-хосте, а не twarpd.
+- mDNS при поднятом VPN **на прокси-хосте**: его VPN заворачивает LAN-подсеть в туннель, unicast-ответы mDNS могут туда уйти. Проверить резолв `.local`-имени сразу после смены сети и после ротации частного MAC клиента.
+- После Task 9 на прокси-хосте (`tcpdump -X port 8080`) вместо голого `FIN` видно `05 01 00` (или `05 02 00 02`).
+- С кредами шлюза: `twarp status` → OK; неверный пароль → `FAIL: SOCKS auth rejected`. Во время реконнекта VPN на прокси-хосте `twarp status --net` → `gateway: upstream VPN is down`.
+- DNS шлюза по TCP: `dscacheutil -q host -a name <имя шлюза>` при поднятом туннеле. Если не резолвится, а `dig +tcp @<gateway.dns>` с прокси-хоста тоже молчит — корпоративный DNS не принимает TCP, нужна отдельная задача.
 - Повторить проверку mDNS уже из root-демона. Проверка 2026-10-16 от пользователя при поднятом TUN (`utun4`, sing-box 1.14.2): `.local`-имя прокси-хоста → `[fe80::…, <IPv4 прокси>]` за 6–13 мс через `net.DefaultResolver` (сборки с cgo и `CGO_ENABLED=0`); с `GODEBUG=netdns=go` → `no such host`; несуществующее имя → таймаут 5 с; `curl --socks5-hostname <имя>.local:8080` → 302. Root ходит в тот же mDNSResponder, поэтому расхождения не ожидается, но оно не проверено.
 - Попытка `twarp down` от другого локального пользователя → `forbidden` и запись в root audit.
 
