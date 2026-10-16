@@ -189,10 +189,12 @@ type LiveStatus struct {
 - Create: `internal/netwatch/netwatch.go`, `internal/netwatch/routesock_darwin.go`, `internal/netwatch/routesock_other.go`
 - Create: `internal/netwatch/netwatch_test.go`
 
-- [ ] интерфейс `Source` (канал событий); darwin-реализация читает `AF_ROUTE` и фильтрует `RTM_NEWADDR/DELADDR/IFINFO` и изменения default-маршрута через `golang.org/x/net/route`
-- [ ] `Watch(ctx, source, debounce, tick, fn)`: пачка событий за `debounce` → один вызов; плюс вызов раз в `tick`; часы инъектируются
-- [ ] тесты с фейковыми источником и часами: 5 событий за 1 с → 1 вызов; тик без событий → вызов; отмена ctx завершает цикл; разбор реального байтового сообщения `RTM_NEWADDR` из фикстуры
-- [ ] `make test` зелёный
+- [x] интерфейс `Source` (канал событий); darwin-реализация читает `AF_ROUTE` и фильтрует `RTM_NEWADDR/DELADDR/IFINFO` и изменения default-маршрута через `golang.org/x/net/route`
+- [x] `Watch(ctx, source, debounce, tick, fn)`: пачка событий за `debounce` → один вызов; плюс вызов раз в `tick`; часы инъектируются
+- [x] тесты с фейковыми источником и часами: 5 событий за 1 с → 1 вызов; тик без событий → вызов; отмена ctx завершает цикл; разбор реального байтового сообщения `RTM_NEWADDR` из фикстуры
+- [x] ➕ окно дебаунса отсчитывается от первого события пачки (непрерывный поток событий не откладывает вызов бесконечно); без источника (не macOS, ошибка сокета) работает только тик
+- [x] ⚠️ тест разбора сообщений routing socket (`routesock_darwin_test.go`) собирается под `GOOS=darwin`, но в Linux-контейнере не запускался — прогнать на маке
+- [x] `make test` зелёный
 
 ### Task 5: Демон twarpd
 
