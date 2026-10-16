@@ -293,10 +293,11 @@ type LiveStatus struct {
 - Create: `internal/itest/daemon_test.go`
 - Modify: `internal/itest/fixture.go`
 
-- [ ] демон на реальном сокете в temp-каталоге, реальный `sing-box check`, фейковый резолвер и источник событий; `gateway.socks: proxy.example:1080`
-- [ ] резолвер меняет `192.0.2.10` → `192.0.2.20`, событие сети → в `config.json` новый адрес, правило direct для `/32` третье, sing-box перечитал конфиг
-- [ ] запрос с чужим uid невозможно сымитировать без root: тест помечен `skip` с причиной, проверка остаётся в юнит-тестах Task 3
-- [ ] `make integration` зелёный
+- [x] демон на реальном сокете в temp-каталоге, реальный `sing-box check`, фейковый резолвер и источник событий; `gateway.socks: proxy.example:1080`
+- [x] резолвер меняет `192.0.2.10` → `192.0.2.20`, событие сети → в `config.json` новый адрес, правило direct для `/32` третье, новый конфиг проходит `sing-box check`; событие без смены адреса не переприменяет; `status` через сокет отдаёт новый живой адрес
+- [x] ⚠️ `Apply` в тесте — без launchd (рендер + `sing-box check` + замена `config.json`): настоящий `app.Service.Apply` требует root и `launchctl`. Перезагрузку живого sing-box проверить на маке (Post-Completion)
+- [x] запрос с чужим uid невозможно сымитировать без root: тест помечен `skip` с причиной, проверка остаётся в юнит-тестах Task 3
+- [x] `make integration`: новые сценарии зелёные; ⚠️ в Linux-контейнере `TestRenderedIPRoutingAndGatewayCLIHotReload` падает и на базовом коммите (окружение: 100.64.0.0/10 недостижим), а `cmd/twarp` install-тесты требуют root для `chown` — гонялись раздельно (itest от обычного пользователя, остальное от root)
 
 ### Task 12: Verify acceptance criteria
 
