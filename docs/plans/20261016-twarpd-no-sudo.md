@@ -221,10 +221,11 @@ type LiveStatus struct {
 - Modify: `internal/launchd/install.go`, `internal/launchd/install_test.go`
 - Modify: newsyslog-конфиг в `plist.go` (строка для `twarpd.log`)
 
-- [ ] `DaemonPlist(executable, owner)` с `RunAtLoad`, `KeepAlive`, `TWARP_OWNER_*`
-- [ ] `Install` пишет и бутстрапит `dev.twarp.daemon` после sing-box; повторный install обновляет plist и перезапускает демон; `Uninstall` снимает его и удаляет сокет
-- [ ] тесты: golden plist; порядок вызовов install расширен; uninstall идемпотентен; падение бутстрапа демона не останавливает sing-box (как для geo)
-- [ ] `make test` зелёный
+- [x] `DaemonPlist(executable, owner)` с `RunAtLoad`, `KeepAlive`, `TWARP_OWNER_*`
+- [x] `Install` пишет и бутстрапит `dev.twarp.daemon` после sing-box; повторный install обновляет plist и перезапускает демон; `Uninstall` снимает его и удаляет сокет
+- [x] тесты: golden plist; порядок вызовов install расширен; uninstall идемпотентен; падение бутстрапа демона не останавливает sing-box (как для geo)
+- [x] ➕ install требует `SUDO_USER` (имя владельца для plist); `TWARP_OUT` передаётся демону, как geo; `Uninstall` удаляет и сокет (`ipc.SocketPath`)
+- [x] `make test` зелёный
 
 ### Task 7: CLI: up/down, TUI по умолчанию, маршрут через демон
 

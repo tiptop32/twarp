@@ -31,6 +31,8 @@ func TestRunInstallUsesLaunchdInstall(t *testing.T) {
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: absent}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"enable", sysexec.SystemTarget()}}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.SingBoxPlistPath}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}, Response: sysexec.Response{Err: absent}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.DaemonPlistPath}}},
 	}}
 	filesystem := &cliFakeFS{}
 	fixture.deps.Runner = runner
@@ -44,8 +46,8 @@ func TestRunInstallUsesLaunchdInstall(t *testing.T) {
 	if err := runner.Verify(); err != nil {
 		t.Fatal(err)
 	}
-	if len(filesystem.writes) != 5 {
-		t.Fatalf("filesystem writes = %v, want staged and promoted config, two plists, newsyslog", filesystem.writes)
+	if len(filesystem.writes) != 6 {
+		t.Fatalf("filesystem writes = %v, want staged and promoted config, three plists, newsyslog", filesystem.writes)
 	}
 }
 
@@ -54,6 +56,7 @@ func TestRunUninstallUsesLaunchdUninstallAndKeepsData(t *testing.T) {
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.geo"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}},
 	}}
 	filesystem := &cliFakeFS{}
 	fixture.deps.Runner = runner
@@ -70,8 +73,8 @@ func TestRunUninstallUsesLaunchdUninstallAndKeepsData(t *testing.T) {
 	if err := runner.Verify(); err != nil {
 		t.Fatal(err)
 	}
-	if len(filesystem.removes) != 3 {
-		t.Fatalf("filesystem removes = %v, want three service files", filesystem.removes)
+	if len(filesystem.removes) != 5 {
+		t.Fatalf("filesystem removes = %v, want three plists, newsyslog and the twarpd socket", filesystem.removes)
 	}
 }
 
@@ -104,6 +107,8 @@ func TestRunInstallHoldsStateLockUntilRuleSetWrite(t *testing.T) {
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: absent}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"enable", sysexec.SystemTarget()}}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.SingBoxPlistPath}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}, Response: sysexec.Response{Err: absent}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.DaemonPlistPath}}},
 	}}
 	configWritten := make(chan struct{})
 	continueInstall := make(chan struct{})

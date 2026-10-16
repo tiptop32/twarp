@@ -32,8 +32,9 @@ func TestInstallPerformsSystemSetupInOrder(t *testing.T) {
 	deps := launchd.Deps{
 		Runner: runner,
 		Sys: fakeSystem{euid: 0, env: map[string]string{
-			"SUDO_UID": "501",
-			"SUDO_GID": "20",
+			"SUDO_UID":  "501",
+			"SUDO_GID":  "20",
+			"SUDO_USER": "alice",
 		}},
 		FS: filesystem,
 		Executable: func() (string, error) {
@@ -83,6 +84,7 @@ func TestInstallPerformsSystemSetupInOrder(t *testing.T) {
 		{kind: "write-rule-set", path: paths.RulesDir(), uid: 501, gid: 20},
 		{kind: "write", path: launchd.SingBoxPlistPath, data: string(fixture(t, "dev.twarp.singbox.plist")), mode: 0o644},
 		{kind: "write", path: launchd.GeoPlistPath, data: string(fixture(t, "dev.twarp.geo.plist")), mode: 0o644},
+		{kind: "write", path: launchd.DaemonPlistPath, data: string(fixture(t, "dev.twarp.daemon.plist")), mode: 0o644},
 		{kind: "write", path: launchd.NewsyslogPath, data: string(fixture(t, "twarp.newsyslog.conf")), mode: 0o644},
 		{kind: "promote", path: paths.OutConfig(), data: paths.OutConfig() + ".candidate"},
 		{kind: "unlock-state"},
@@ -346,8 +348,10 @@ func TestUninstallIsIdempotent(t *testing.T) {
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.geo"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: absent}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.geo"}}, Response: sysexec.Response{Err: absent}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}, Response: sysexec.Response{Err: absent}},
 	}}
 	operations := []fsOperation{}
 	filesystem := &fakeFS{operations: &operations, removeOnce: true, removed: map[string]bool{}}
@@ -364,10 +368,14 @@ func TestUninstallIsIdempotent(t *testing.T) {
 	want := []fsOperation{
 		{kind: "remove", path: launchd.SingBoxPlistPath},
 		{kind: "remove", path: launchd.GeoPlistPath},
+		{kind: "remove", path: launchd.DaemonPlistPath},
 		{kind: "remove", path: launchd.NewsyslogPath},
+		{kind: "remove", path: "/var/run/twarp/twarpd.sock"},
 		{kind: "remove", path: launchd.SingBoxPlistPath},
 		{kind: "remove", path: launchd.GeoPlistPath},
+		{kind: "remove", path: launchd.DaemonPlistPath},
 		{kind: "remove", path: launchd.NewsyslogPath},
+		{kind: "remove", path: "/var/run/twarp/twarpd.sock"},
 	}
 	if !reflect.DeepEqual(operations, want) {
 		t.Fatalf("filesystem operations = %#v, want %#v", operations, want)
@@ -389,6 +397,8 @@ func successfulInstallCalls(t *testing.T) []sysexec.ExpectedCall {
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: absent}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"enable", sysexec.SystemTarget()}}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.SingBoxPlistPath}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}, Response: sysexec.Response{Err: absent}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.DaemonPlistPath}}},
 	}
 }
 
@@ -397,7 +407,7 @@ func installPaths() config.Paths {
 }
 
 func rootSystem() fakeSystem {
-	return fakeSystem{euid: 0, env: map[string]string{"SUDO_UID": "501", "SUDO_GID": "20"}}
+	return fakeSystem{euid: 0, env: map[string]string{"SUDO_UID": "501", "SUDO_GID": "20", "SUDO_USER": "alice"}}
 }
 
 type fakeSystem struct {
@@ -571,5 +581,53 @@ func TestOSFSCandidatePromotionKeepsInstalledConfigUntilPromote(t *testing.T) {
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("promoted mode = %v, error = %v, want 0600", info.Mode().Perm(), err)
+	}
+}
+
+// twarpd loads after sing-box: its failure is reported, but the new config
+// and the running tunnel stay.
+func TestInstallDaemonFailureKeepsSingBoxRunning(t *testing.T) {
+	t.Parallel()
+
+	paths := installPaths()
+	ruleSetPath := filepath.Join(paths.RulesDir(), "gateway-ip.json")
+	operations := []fsOperation{}
+	filesystem := &fakeFS{operations: &operations, files: map[string]storedFile{
+		paths.OutConfig(): {data: "working config\n", mode: 0o600},
+	}}
+	calls := successfulInstallCalls(t)
+	calls[len(calls)-1].Err = errors.New("daemon bootstrap failed")
+	runner := &sysexec.Fake{Expect: calls}
+	err := launchd.Install(context.Background(), launchd.Deps{
+		Runner:     runner,
+		Sys:        rootSystem(),
+		FS:         filesystem,
+		Executable: func() (string, error) { return "/usr/local/bin/twarp", nil },
+	}, launchd.Options{
+		Paths:        paths,
+		LockState:    func() (func(), error) { return func() {}, nil },
+		RenderConfig: func() ([]byte, error) { return []byte("new config\n"), nil },
+		WriteRuleSet: func(string, int, int) error {
+			return filesystem.WriteFileOwned(ruleSetPath, []byte("new rules\n"), 0o644, 501, 20)
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "sing-box is running, but loading twarpd failed: daemon bootstrap failed") {
+		t.Fatalf("Install() error = %v, want twarpd failure", err)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	if got := filesystem.files[paths.OutConfig()].data; got != "new config\n" {
+		t.Errorf("config after twarpd failure = %q, want the new config kept", got)
+	}
+}
+
+func TestInstallRequiresOwnerName(t *testing.T) {
+	t.Parallel()
+
+	system := fakeSystem{euid: 0, env: map[string]string{"SUDO_UID": "501", "SUDO_GID": "20"}}
+	err := launchd.Install(context.Background(), launchd.Deps{Sys: system}, launchd.Options{Paths: installPaths()})
+	if err == nil || !strings.Contains(err.Error(), "SUDO_USER is required") {
+		t.Fatalf("Install() error = %v, want owner name error", err)
 	}
 }

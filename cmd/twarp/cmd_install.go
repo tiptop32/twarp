@@ -70,7 +70,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if err != nil {
 		return lifecycleError("install", stderr, fmt.Errorf("services installed, but %w", err))
 	}
-	_, _ = fmt.Fprintln(stdout, "installed sing-box and geo launchd services"+note)
+	_, _ = fmt.Fprintln(stdout, "installed sing-box, geo and twarpd launchd services"+note)
 	_, _ = fmt.Fprintln(stdout, "check: twarp status")
 	return 0
 }
