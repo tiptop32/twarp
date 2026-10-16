@@ -82,14 +82,32 @@ twarp status ────────┘  twarpd.sock ── twarpd┼─ netwat
 - SystemConfiguration через cgo: ломает сборку без Xcode CLT ради того, что даёт routing socket.
 - Авто-apply при каждой правке `twarp.yaml`: пользователь не выбрал; `twarp up`/`twarp apply` без sudo покрывают это одной командой, а status предупредит об устаревшем конфиге.
 
+## Review amendments (2026-10-16)
+
+Ревью плана до реализации. Пункты ниже меняют задачи; в задачах они отмечены ➕.
+
+1. **Root читает файлы пользователя без пароля.** Раньше `apply` требовал sudo, то есть пользователь уже был root. Теперь любой процесс владельца через сокет заставляет root открыть `~/.config/twarp/*`. Симлинк `twarp.yaml → /etc/master.passwd` превращает текст ошибки разбора в `Response.Error` в оракул чтения root-файлов, а `OpenFile(O_CREATE)` на `gateway-ips.lock` через симлинк создаёт файл в любом root-каталоге. ➕ В демоне файлы владельца открываются с `O_NOFOLLOW`, проверяются через `fstat` (обычный файл, uid владельца), каталог twarp home тоже принадлежит владельцу и не симлинк. Проверка в `config`/`state` включается опцией, CLI под sudo ведёт себя как раньше.
+2. **`gateway.socks` по имени ломает не только render.** `app.Service.Gateway()` (CLI `gateway add`, MCP, TUI) и `state` (запрет префикса с адресом SOCKS) парсят хост как IP. ➕ Task 2: адрес для этих проверок берётся через тот же `gwaddr.Resolve`; если имя не резолвится, проверка «префикс содержит SOCKS» пропускается с предупреждением, а не роняет `gateway add`.
+3. **Петля DNS.** Имена из `gateway.domains` резолвятся через `/etc/resolver` → TUN → DNS шлюза через тот самый SOCKS. Если имя SOCKS-хоста попадает под `gateway.domains`, после смены сети оно не разрешится никогда. ➕ Валидация отклоняет такое имя. README: имя рассчитано на mDNS (`.local`) или `direct.local_domains`; прочие имена при поднятом TUN идут в удалённый DNS через `vpn`, и LAN-имя там не найдётся.
+4. **Нет межпроцессной сериализации.** Mutex демона не защищает от параллельного `sudo twarp apply` или `install`: оба пишут candidate и `config.json`, откаты затирают друг друга. ➕ `app.Apply` и `Install` берут `flock` на `<out>/apply.lock`.
+5. **Демон в цикле KeepAlive.** Если бинарь не root-owned (Homebrew на Intel: `/usr/local/bin` принадлежит пользователю), демон будет падать и перезапускаться. ➕ `install` проверяет бинарь до записи plist демона и отказывает с объяснением; демон повторяет проверку при старте.
+6. **В `Request` нет поля `actor`**, хотя аудит его требует. ➕ `Actor string` в протоколе, допустимы `cli` и `tui`.
+7. **Проверка peer uid только на darwin.** С заглушкой в `peercred_other.go` тест авторизации в Linux-контейнере ничего не проверяет. ➕ Linux: `SO_PEERCRED` (`unix.GetsockoptUcred`); прочие ОС: отказ всем.
+8. **Сервер без дедлайнов.** Локальный процесс может держать соединения открытыми. ➕ Дедлайн чтения запроса 5 с, не больше 8 одновременных соединений.
+9. **`config.json` — root `0600`.** Без демона CLI не прочитает живой адрес; Task 8 опирается только на `stat` (mtime). ➕ Fallback по живому адресу только под sudo.
+10. **`twarp up` перезагружает работающий sing-box без нужды.** `Apply` на запущенном сервисе делает reload, это рвёт соединения. ➕ `up` вызывает `Apply`, только если конфиг устарел (yaml или secrets новее `config.json`) или ещё не применён; затем `Start`.
+11. **`golang.org/x/net/route` собирается только на BSD/darwin.** Тест разбора `RTM_NEWADDR` в Linux не запустится. ➕ Darwin-код проверяется сборкой `GOOS=darwin go vet ./...`; разбор фикстуры под build tag `darwin`.
+12. **Двойной резолв.** Демон резолвит имя, чтобы решить, нужен ли `Apply`, а `Apply` через `renderInputs` резолвит снова, уже под mutex. ➕ Демон передаёт найденный адрес в `Apply` (`Deps.GatewayResolver` с кэшем последнего ответа), повторного ожидания 5 с под mutex нет.
+
 ## Technical Details
 
 Протокол (`internal/ipc`):
 
 ```go
 type Request struct {
-	V  int    `json:"v"`  // 1
-	Op string `json:"op"` // up | down | apply | geo_update | status
+	V     int    `json:"v"`     // 1
+	Op    string `json:"op"`    // up | down | apply | geo_update | status
+	Actor string `json:"actor"` // cli | tui (➕ review 6)
 }
 
 type Response struct {
