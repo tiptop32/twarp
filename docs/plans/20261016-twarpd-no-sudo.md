@@ -172,14 +172,16 @@ type LiveStatus struct {
 ### Task 3: IPC: протокол, сервер с проверкой peer uid, клиент
 
 **Files:**
-- Create: `internal/ipc/protocol.go`, `internal/ipc/server.go`, `internal/ipc/peercred_darwin.go`, `internal/ipc/peercred_other.go`, `internal/ipc/client.go`
+- Create: `internal/ipc/protocol.go`, `internal/ipc/server.go`, `internal/ipc/peercred_darwin.go`, `internal/ipc/peercred_linux.go`, `internal/ipc/peercred_other.go`, `internal/ipc/client.go`
 - Create: `internal/ipc/ipc_test.go`
 
-- [ ] типы `Request`/`Response`/`LiveStatus`, версия 1, список операций и акторов
-- [ ] сервер: `Listen(path, allowedUIDs, handler)`; создаёт каталог `0755`, удаляет устаревший сокет, `chmod 0666`; на соединение `GetsockoptXucred` → uid вне списка получает `forbidden`; лимит 4 KiB, один запрос на соединение
-- [ ] клиент: `Call(ctx, path, req)`; `ErrDaemonUnavailable` при отсутствии сокета или `ECONNREFUSED`
-- [ ] тесты на реальном сокете в `t.TempDir()`: успешный вызов; uid не в списке → forbidden (список без `os.Getuid()`); неизвестная операция и версия; слишком длинный запрос; устаревший файл сокета перезаписывается; клиент без демона → `ErrDaemonUnavailable`
-- [ ] `make test` зелёный
+- [x] типы `Request`/`Response`/`LiveStatus`, версия 1, список операций и акторов
+- [x] сервер: `Listen(path, allowedUIDs, handler)`; создаёт каталог `0755`, удаляет устаревший сокет, `chmod 0666`; на соединение `GetsockoptXucred` → uid вне списка получает `forbidden`; лимит 4 KiB, один запрос на соединение
+- [x] клиент: `Call(ctx, path, req)`; `ErrDaemonUnavailable` при отсутствии сокета или `ECONNREFUSED`
+- [x] тесты на реальном сокете в `t.TempDir()`: успешный вызов; uid не в списке → forbidden (список без `os.Getuid()`); неизвестная операция и версия; слишком длинный запрос; устаревший файл сокета перезаписывается; клиент без демона → `ErrDaemonUnavailable`
+- [x] ➕ `peercred_linux.go` (`SO_PEERCRED`): тесты на реальном сокете идут и в Linux-контейнере
+- [x] ➕ устаревший сокет удаляется, только если по пути действительно сокет; обычный файл не трогаем
+- [x] `make test` зелёный
 
 ### Task 4: netwatch: события смены сети
 
