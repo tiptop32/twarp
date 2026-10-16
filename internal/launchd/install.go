@@ -11,6 +11,7 @@ import (
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/ipc"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/sysexec"
@@ -93,9 +94,12 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	if deps.Sys == nil || deps.Sys.Geteuid() != 0 {
 		return errors.New("run with sudo")
 	}
-	uid, gid, ok := config.SudoOwner(deps.Sys)
+	uid, gid, ownerName, ok := config.Owner(deps.Sys)
 	if !ok {
 		return errors.New("run with sudo: SUDO_UID and SUDO_GID are required")
+	}
+	if ownerName == "" {
+		return errors.New("run with sudo: SUDO_USER is required to record the twarpd owner")
 	}
 	if options.Paths.SingBox == "" {
 		return errors.New("sing-box executable is not configured")
@@ -128,6 +132,10 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 		return err
 	}
 	geoPlist, err := GeoPlist(executable, options.Paths.Out)
+	if err != nil {
+		return err
+	}
+	daemonPlist, err := DaemonPlist(executable, options.Paths.Out, Owner{UID: uid, GID: gid, User: ownerName})
 	if err != nil {
 		return err
 	}
@@ -229,6 +237,9 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	if err := deps.FS.WriteFile(GeoPlistPath, geoPlist, 0o644); err != nil {
 		return restoreRuleSet(discardCandidate(fmt.Errorf("write geo plist: %w", err)))
 	}
+	if err := deps.FS.WriteFile(DaemonPlistPath, daemonPlist, 0o644); err != nil {
+		return restoreRuleSet(discardCandidate(fmt.Errorf("write twarpd plist: %w", err)))
+	}
 	if err := deps.FS.WriteFile(NewsyslogPath, NewsyslogConfig(), 0o644); err != nil {
 		return restoreRuleSet(discardCandidate(fmt.Errorf("write newsyslog config: %w", err)))
 	}
@@ -259,6 +270,15 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	releaseState()
 	releaseState = func() {}
 
+	// twarpd last: the tunnel is up by now and a daemon failure must not take
+	// it down; sudo twarp start|stop|apply keep working without it.
+	// Reinstalling restarts it with the new plist.
+	if err := sysexec.Bootout(ctx, deps.Runner, sysexec.DaemonTarget()); err != nil {
+		return fmt.Errorf("sing-box is running, but unloading the old twarpd failed: %w", err)
+	}
+	if err := sysexec.Bootstrap(ctx, deps.Runner, "system", DaemonPlistPath); err != nil {
+		return fmt.Errorf("sing-box is running, but loading twarpd failed: %w", err)
+	}
 	return nil
 }
 
@@ -278,7 +298,10 @@ func Uninstall(ctx context.Context, deps Deps) error {
 	if err := sysexec.Bootout(ctx, deps.Runner, "system/"+sysexec.GeoLabel); err != nil {
 		uninstallErrors = append(uninstallErrors, fmt.Errorf("unload geo service: %w", err))
 	}
-	for _, path := range []string{SingBoxPlistPath, GeoPlistPath, NewsyslogPath} {
+	if err := sysexec.Bootout(ctx, deps.Runner, sysexec.DaemonTarget()); err != nil {
+		uninstallErrors = append(uninstallErrors, fmt.Errorf("unload twarpd: %w", err))
+	}
+	for _, path := range []string{SingBoxPlistPath, GeoPlistPath, DaemonPlistPath, NewsyslogPath, ipc.SocketPath(deps.Sys.Getenv)} {
 		if err := deps.FS.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			uninstallErrors = append(uninstallErrors, fmt.Errorf("remove %q: %w", path, err))
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/gwaddr"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/singbox"
@@ -110,7 +111,7 @@ func (s *Service) Stop(ctx context.Context) (string, error) {
 	if err := s.RemoveResolvers(ctx); err != nil {
 		return "", fmt.Errorf("stopped, but %w", err)
 	}
-	return "stopped; start again: sudo twarp start", nil
+	return "stopped; start again: twarp up", nil
 }
 
 // GeoUpdate downloads the geo rule-sets into the root-owned geo directory.
@@ -127,12 +128,18 @@ func (s *Service) GeoUpdate(ctx context.Context) (geo.Report, error) {
 
 // RenderInputs loads config, secrets and gateway state and renders the
 // production sing-box config.
-func (s *Service) RenderInputs() (config.Paths, []netip.Prefix, []byte, error) {
-	paths, _, prefixes, data, err := s.renderInputs()
+func (s *Service) RenderInputs(ctx context.Context) (config.Paths, []netip.Prefix, []byte, error) {
+	paths, _, prefixes, data, err := s.renderInputs(ctx)
 	return paths, prefixes, data, err
 }
 
-func (s *Service) renderInputs() (config.Paths, config.Config, []netip.Prefix, []byte, error) {
+// GatewaySOCKS resolves gateway.socks: an IP literal as is, a host name to
+// its first IPv4 address through the system resolver (see gwaddr).
+func (s *Service) GatewaySOCKS(ctx context.Context, cfg config.Config) (netip.AddrPort, error) {
+	return gwaddr.Resolve(ctx, s.deps.LookupIP, cfg.Gateway.Socks)
+}
+
+func (s *Service) renderInputs(ctx context.Context) (config.Paths, config.Config, []netip.Prefix, []byte, error) {
 	paths, err := config.Resolve(s.deps.Sys)
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
@@ -149,7 +156,11 @@ func (s *Service) renderInputs() (config.Paths, config.Config, []netip.Prefix, [
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
 	}
-	data, err := render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN})
+	socks, err := s.GatewaySOCKS(ctx, cfg)
+	if err != nil {
+		return config.Paths{}, config.Config{}, nil, nil, err
+	}
+	data, err := render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN, GatewaySocks: socks})
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
 	}
@@ -166,9 +177,9 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 	if s.deps.Runner == nil || s.deps.FS == nil {
 		return "", errors.New("dependencies are incomplete")
 	}
-	uid, gid, ok := config.SudoOwner(s.deps.Sys)
+	uid, gid, _, ok := config.Owner(s.deps.Sys)
 	if !ok {
-		return "", fmt.Errorf("%w: SUDO_UID and SUDO_GID are required", ErrRootRequired)
+		return "", fmt.Errorf("%w: run via sudo or through twarpd (SUDO_UID/SUDO_GID or TWARP_OWNER_UID/TWARP_OWNER_GID are required)", ErrRootRequired)
 	}
 
 	resolved, err := config.Resolve(s.deps.Sys)
@@ -187,7 +198,7 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		release()
 		return "", s.failApply(fmt.Errorf("read installed gateway rule-set: %w", readErr))
 	}
-	paths, cfg, prefixes, data, err := s.renderInputs()
+	paths, cfg, prefixes, data, err := s.renderInputs(ctx)
 	if err != nil {
 		release()
 		return "", s.failApply(err)
@@ -245,7 +256,7 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		if err := s.appendRootAudit("apply", "stopped"); err != nil {
 			return "", err
 		}
-		return "applied; sing-box stays stopped; start it: sudo twarp start", nil
+		return "applied; sing-box stays stopped; start it: twarp up", nil
 	}
 	failAfterPromotion := func(cause error, reload bool) (string, error) {
 		cause = errors.Join(cause, restoreApplyConfig(paths.OutConfig(), previousConfig, configReadErr == nil))

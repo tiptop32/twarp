@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"os"
 
@@ -60,14 +59,12 @@ func (s *Service) Gateway() (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	host, _, err := net.SplitHostPort(cfg.Gateway.Socks)
+	// the address keeps CIDRs that contain the SOCKS host out of the list
+	socks, err := s.GatewaySOCKS(context.Background(), cfg)
 	if err != nil {
-		return nil, fmt.Errorf("parse gateway.socks: %w", err)
+		return nil, err
 	}
-	gatewaySocks, err := netip.ParseAddr(host)
-	if err != nil {
-		return nil, fmt.Errorf("gateway.socks host must be an IP address: %w", err)
-	}
+	gatewaySocks := socks.Addr()
 
 	var running func() bool
 	secrets, err := config.LoadSecrets(paths.SecretsFile())

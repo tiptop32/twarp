@@ -65,6 +65,30 @@ type VPNConfig struct {
 type Secrets struct {
 	VPNURI      string `yaml:"vpn_uri"`
 	ClashSecret string `yaml:"clash_secret"`
+	// GatewaySocksUser and GatewaySocksPassword are the optional SOCKS5
+	// username/password (RFC 1929) of the gateway; set together or not at all.
+	GatewaySocksUser     string `yaml:"gateway_socks_user,omitempty"`
+	GatewaySocksPassword string `yaml:"gateway_socks_password,omitempty"`
+}
+
+// HasGatewayAuth reports whether gateway SOCKS credentials are configured.
+func (secrets Secrets) HasGatewayAuth() bool {
+	return secrets.GatewaySocksUser != ""
+}
+
+// ValidateGatewayAuth checks the gateway SOCKS credentials: both or neither,
+// each 1 to 255 bytes (the RFC 1929 limit).
+func ValidateGatewayAuth(user, password string) error {
+	if user == "" && password == "" {
+		return nil
+	}
+	if user == "" || password == "" {
+		return errors.New("gateway_socks_user and gateway_socks_password must be set together")
+	}
+	if len(user) > 255 || len(password) > 255 {
+		return errors.New("gateway SOCKS username and password must be at most 255 bytes")
+	}
+	return nil
 }
 
 type rawConfig struct {
@@ -136,6 +160,9 @@ func LoadSecrets(path string) (Secrets, error) {
 	if err := decoder.Decode(&secrets); err != nil {
 		return Secrets{}, fmt.Errorf("decode secrets %q: %w", path, err)
 	}
+	if err := ValidateGatewayAuth(secrets.GatewaySocksUser, secrets.GatewaySocksPassword); err != nil {
+		return Secrets{}, fmt.Errorf("secrets %q: %w", path, err)
+	}
 	return secrets, nil
 }
 
@@ -149,6 +176,47 @@ func SaveSecrets(path string, secrets Secrets) error {
 		return fmt.Errorf("write secrets %q: %w", path, err)
 	}
 	return nil
+}
+
+// validateGatewayHost accepts an IP literal or a DNS host name (RFC 1123
+// labels, e.g. proxyhost.local). Names are resolved at apply time and again
+// by twarpd on network changes; literals are used as is. Loopback stays
+// allowed for local test gateways.
+func validateGatewayHost(host string) error {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if addr.IsUnspecified() || addr.IsMulticast() {
+			return errors.New("gateway.socks host must not be an unspecified or multicast address")
+		}
+		return nil
+	}
+	if !validHostName(host) {
+		return errors.New("gateway.socks host must be an IP address or a host name such as proxyhost.local")
+	}
+	return nil
+}
+
+func validHostName(host string) bool {
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	allNumeric := true
+	for label := range strings.SplitSeq(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			switch {
+			case r >= '0' && r <= '9':
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '-':
+				allNumeric = false
+			default:
+				return false
+			}
+		}
+	}
+	// "192.168.1" is a mistyped address, not a name
+	return !allNumeric
 }
 
 func defaultRawConfig() rawConfig {
@@ -170,8 +238,8 @@ func validateConfig(raw rawConfig) (Config, error) {
 		return Config{}, errors.New("gateway.socks must be host:port with a port from 1 to 65535")
 	}
 	gatewaySocksHost, _, _ := net.SplitHostPort(raw.Gateway.Socks)
-	if _, err := netip.ParseAddr(gatewaySocksHost); err != nil {
-		return Config{}, errors.New("gateway.socks host must be an IP address")
+	if err := validateGatewayHost(gatewaySocksHost); err != nil {
+		return Config{}, err
 	}
 	if len(raw.Gateway.Domains) == 0 {
 		return Config{}, errors.New("gateway.domains is required and must not be empty")

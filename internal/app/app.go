@@ -16,6 +16,7 @@ import (
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/ipc"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
@@ -28,6 +29,11 @@ const (
 	ActorCLI = "cli"
 	ActorTUI = "tui"
 	ActorMCP = "mcp"
+	// twarpd: requests from the CLI or TUI over the socket, and its own
+	// re-apply after a network change.
+	ActorDaemonCLI = "daemon-cli"
+	ActorDaemonTUI = "daemon-tui"
+	ActorDaemonNet = "daemon-net"
 )
 
 // ErrRootRequired is returned by operations that change system state.
@@ -54,6 +60,9 @@ type Deps struct {
 	// GeoOptions overrides download settings; Dir and AuditFile are always set
 	// by GeoUpdate.
 	GeoOptions geo.Options
+	// Daemon asks twarpd what config it runs. Nil, or an unavailable daemon,
+	// falls back to reading config.json (root) or its mtime (users).
+	Daemon func(context.Context) (*ipc.LiveStatus, error)
 }
 
 // Service implements twarp operations for one front end, identified by actor
@@ -96,6 +105,12 @@ func RootAuditFile(system config.Sys) string {
 // SingBoxLogFile is where launchd sends sing-box output.
 func SingBoxLogFile(system config.Sys) string {
 	return filepath.Join(LogDir(system), "sing-box.log")
+}
+
+// AuditRoot appends one record to the root audit log with this Service's
+// actor.
+func (s *Service) AuditRoot(operation, result string) error {
+	return s.appendRootAudit(operation, result)
 }
 
 func (s *Service) appendRootAudit(operation, result string) error {

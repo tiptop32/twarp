@@ -16,6 +16,8 @@ import (
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/ipc"
+	"github.com/tiptop32/twarp/internal/socksprobe"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
 
@@ -130,7 +132,7 @@ func TestRunStatusReportsStaleOwnTunnel(t *testing.T) {
 			}}
 			fixture.deps.Runner = fixture.runner
 			stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
-			if code != 1 || !strings.Contains(stdout, "FAIL tunnel: stale route: utun9 172.19.0.1 holds the default route, but the sing-box service is not running; run: sudo twarp start") {
+			if code != 1 || !strings.Contains(stdout, "FAIL tunnel: stale route: utun9 172.19.0.1 holds the default route, but the sing-box service is not running; run: twarp up") {
 				t.Fatalf("status = (%d, %q), want stale own utun failure", code, stdout)
 			}
 			if err := fixture.runner.Verify(); err != nil {
@@ -154,7 +156,7 @@ func TestRunStatusFailsOnUnexpectedPrintError(t *testing.T) {
 	if code != 1 || !strings.Contains(stdout, "FAIL tunnel: inspect sing-box service") {
 		t.Fatalf("status = (%d, %q), want tunnel inspection failure", code, stdout)
 	}
-	for _, unwanted := range []string{"stale route", "sudo twarp start"} {
+	for _, unwanted := range []string{"stale route", "twarp up"} {
 		if strings.Contains(stdout, unwanted) {
 			t.Errorf("stdout = %q, want no %q", stdout, unwanted)
 		}
@@ -183,7 +185,7 @@ func TestRunStatusWarnsAboutStaleGeo(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
-	if code != 0 || !strings.Contains(stdout, "WARN geo: geoip-ru.srs is 9 days old: sudo twarp geo update") {
+	if code != 0 || !strings.Contains(stdout, "WARN geo: geoip-ru.srs is 9 days old: twarp geo update") {
 		t.Fatalf("status = (%d, %q), want stale geo warning", code, stdout)
 	}
 }
@@ -194,7 +196,7 @@ func TestRunStatusFailsWhenGeoFileIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
-	if code != 1 || !strings.Contains(stdout, "FAIL geo: geoip-ru.srs is missing: sudo twarp geo update") {
+	if code != 1 || !strings.Contains(stdout, "FAIL geo: geoip-ru.srs is missing: twarp geo update") {
 		t.Fatalf("status = (%d, %q), want missing geo failure", code, stdout)
 	}
 }
@@ -324,9 +326,7 @@ func newStatusFixture(t *testing.T, clashStatus int) statusFixture {
 			HTTPClient: client,
 			Now:        func() time.Time { return now },
 			Dial: func(context.Context, string, string) (net.Conn, error) {
-				server, client := net.Pipe()
-				_ = server.Close()
-				return client, nil
+				return socksprobe.FakeServer{}.Dial(), nil
 			},
 		},
 		runner: runner,
@@ -373,5 +373,48 @@ func TestRunStatusMissingSecretsKeepsOtherChecks(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout = %q, want %q", stdout, want)
 		}
+	}
+}
+
+// A port that accepts and closes is not a SOCKS gateway: the probe must not
+// report it as reachable.
+func TestRunStatusRejectsNonSOCKSGateway(t *testing.T) {
+	fixture := newStatusFixture(t, http.StatusOK)
+	fixture.deps.Dial = func(context.Context, string, string) (net.Conn, error) {
+		server, client := net.Pipe()
+		_ = server.Close()
+		return client, nil
+	}
+	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
+	if code != 1 || !strings.Contains(stdout, "FAIL gateway: 192.0.2.10:1080: not a SOCKS5 server") {
+		t.Fatalf("status = (%d, %q), want SOCKS failure", code, stdout)
+	}
+}
+
+// The 2026-10-16 case end to end: the daemon reports the address sing-box
+// runs on, and status must not call a stale twarp.yaml OK.
+func TestRunStatusUsesTheDaemonsLiveAddress(t *testing.T) {
+	fixture := newStatusFixture(t, http.StatusOK)
+	var dialed string
+	fixture.deps.Dial = func(_ context.Context, _, address string) (net.Conn, error) {
+		dialed = address
+		return socksprobe.FakeServer{}.Dial(), nil
+	}
+	daemon := &fakeDaemon{live: &ipc.LiveStatus{GatewayConfigured: "192.0.2.10:1080", GatewayLive: "192.0.2.105:1080", Stale: true}}
+	fixture.deps.IPC = daemon.call
+	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
+	if code != 0 {
+		t.Fatalf("status exit = %d, want warnings only\n%s", code, stdout)
+	}
+	for _, want := range []string{
+		"WARN gateway: sing-box runs on 192.0.2.105:1080, but twarp.yaml has 192.0.2.10:1080; run: twarp apply",
+		"WARN config: twarp.yaml or secrets.yaml changed after the last apply; run: twarp apply",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout = %q, want %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "OK   gateway:") || dialed != "192.0.2.105:1080" || daemon.ops() != "status" {
+		t.Fatalf("status must probe the live address and not report OK; dialed %q, ops %q\n%s", dialed, daemon.ops(), stdout)
 	}
 }

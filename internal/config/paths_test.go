@@ -96,7 +96,7 @@ func TestResolveRejectsRootWithoutSudoUser(t *testing.T) {
 		if err == nil {
 			t.Fatalf("Resolve() with env %v error = nil, want SUDO_USER error", env)
 		}
-		const want = "run via sudo from your user account; SUDO_USER is empty"
+		const want = "run via sudo from your user account or through twarpd; SUDO_USER is empty"
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Resolve() error = %q, want it to contain %q", err, want)
 		}
@@ -141,6 +141,60 @@ func TestPathsHelpers(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("path helpers = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveUsesTwarpdOwnerHomeForRoot(t *testing.T) {
+	t.Parallel()
+
+	users := map[string]*user.User{
+		"alice": {Username: "alice", HomeDir: "/Users/alice"},
+		"bob":   {Username: "bob", HomeDir: "/Users/bob"},
+	}
+	owner := map[string]string{"HOME": "/var/root", "TWARP_OWNER_UID": "501", "TWARP_OWNER_GID": "20", "TWARP_OWNER_USER": "alice"}
+	got, err := config.Resolve(fakeSys{euid: 0, env: owner, users: users})
+	if err != nil || got.Home != "/Users/alice/.config/twarp" {
+		t.Fatalf("Resolve(twarpd owner) = (%q, %v), want alice's config directory", got.Home, err)
+	}
+
+	withSudo := map[string]string{"SUDO_UID": "502", "SUDO_GID": "20", "SUDO_USER": "bob"}
+	for key, value := range owner {
+		withSudo[key] = value
+	}
+	got, err = config.Resolve(fakeSys{euid: 0, env: withSudo, users: users})
+	if err != nil || got.Home != "/Users/bob/.config/twarp" {
+		t.Fatalf("Resolve(sudo and owner) = (%q, %v), want the sudo user's directory", got.Home, err)
+	}
+
+	badIDs := map[string]string{"HOME": "/var/root", "TWARP_OWNER_UID": "x", "TWARP_OWNER_GID": "20", "TWARP_OWNER_USER": "alice"}
+	if _, err := config.Resolve(fakeSys{euid: 0, env: badIDs, users: users}); err == nil {
+		t.Fatal("Resolve(invalid owner IDs) error = nil, want owner error")
+	}
+}
+
+func TestOwner(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		env      map[string]string
+		uid, gid int
+		user     string
+		ok       bool
+	}{
+		{"sudo", map[string]string{"SUDO_UID": "501", "SUDO_GID": "20", "SUDO_USER": "alice"}, 501, 20, "alice", true},
+		{"twarpd owner", map[string]string{"TWARP_OWNER_UID": "502", "TWARP_OWNER_GID": "21", "TWARP_OWNER_USER": "bob"}, 502, 21, "bob", true},
+		{"sudo wins", map[string]string{"SUDO_UID": "501", "SUDO_GID": "20", "SUDO_USER": "alice", "TWARP_OWNER_UID": "502", "TWARP_OWNER_GID": "21", "TWARP_OWNER_USER": "bob"}, 501, 20, "alice", true},
+		{"invalid owner ids", map[string]string{"TWARP_OWNER_UID": "-5", "TWARP_OWNER_GID": "21", "TWARP_OWNER_USER": "bob"}, 0, 0, "", false},
+		{"empty", map[string]string{}, 0, 0, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			uid, gid, name, ok := config.Owner(fakeSys{euid: 0, env: tt.env})
+			if uid != tt.uid || gid != tt.gid || name != tt.user || ok != tt.ok {
+				t.Fatalf("Owner() = (%d, %d, %q, %t), want (%d, %d, %q, %t)", uid, gid, name, ok, tt.uid, tt.gid, tt.user, tt.ok)
+			}
+		})
 	}
 }
 

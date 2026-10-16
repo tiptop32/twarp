@@ -116,3 +116,23 @@ func newCLIRenderFixture(t *testing.T, euid int) cliRenderFixture {
 		home: home, out: out, uuid: uuid, publicKey: publicKey, clashSecret: clashSecret,
 	}
 }
+
+func TestRunRenderMasksGatewayPassword(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 501)
+	secretsPath := filepath.Join(fixture.home, "secrets.yaml")
+	secrets, err := config.LoadSecrets(secretsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets.GatewaySocksUser, secrets.GatewaySocksPassword = "proxy", syntheticGatewayPassword
+	if err := config.SaveSecrets(secretsPath, secrets); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := runCLIForTest([]string{"render"}, fixture.deps)
+	if code != 0 || stderr != "" {
+		t.Fatalf("render = (%d, %q, %q), want success", code, stdout, stderr)
+	}
+	if strings.Contains(stdout, syntheticGatewayPassword) || !strings.Contains(stdout, `"password": "***"`) || !strings.Contains(stdout, `"username": "proxy"`) {
+		t.Fatalf("render must mask the gateway password and keep the user:\n%s", stdout)
+	}
+}

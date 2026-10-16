@@ -17,6 +17,7 @@ import (
 	"github.com/tiptop32/twarp/internal/geo"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/singbox"
+	"github.com/tiptop32/twarp/internal/socksprobe"
 	"github.com/tiptop32/twarp/internal/state"
 	"github.com/tiptop32/twarp/internal/sysexec"
 	"github.com/tiptop32/twarp/internal/uri"
@@ -47,7 +48,8 @@ type Check struct {
 
 // StatusOptions selects optional, slower checks.
 type StatusOptions struct {
-	// Network also compares the public egress address with the vpn server.
+	// Network also compares the public egress address with the vpn server
+	// and sends one CONNECT through the gateway to gateway.dns.
 	Network bool
 }
 
@@ -63,7 +65,10 @@ type Status struct {
 	TunnelInterface string
 	TunnelAddr      string
 
+	// GatewaySocks is gateway.socks as configured; GatewayLive is the
+	// address sing-box runs on, when known.
 	GatewaySocks     string
+	GatewayLive      string
 	GatewayReachable bool
 	GatewayCIDRs     int
 
@@ -116,7 +121,9 @@ func (s *Service) Status(ctx context.Context, options StatusOptions) Status {
 	}
 
 	s.checkSingBox(ctx, &status, cfg, secrets)
-	s.checkGateway(ctx, &status, cfg.Gateway.Socks)
+	live := s.liveGateway(ctx, paths)
+	s.checkGateway(ctx, &status, cfg, live, gatewayCredentials(secrets), options.Network)
+	checkLive(&status, live)
 	s.checkTunnel(ctx, &status)
 	checkGatewayCIDRs(&status, paths)
 	checkGeo(&status, paths.GeoDir(), s.now())
@@ -146,22 +153,123 @@ func (s *Service) checkSingBox(ctx context.Context, status *Status, cfg config.C
 	}
 }
 
-func (s *Service) checkGateway(ctx context.Context, status *Status, address string) {
-	status.GatewaySocks = address
+// gatewayCredentials returns the gateway SOCKS credentials, nil without auth.
+func gatewayCredentials(secrets config.Secrets) *socksprobe.Credentials {
+	if !secrets.HasGatewayAuth() {
+		return nil
+	}
+	return &socksprobe.Credentials{User: secrets.GatewaySocksUser, Password: secrets.GatewaySocksPassword}
+}
+
+// liveState is what status knows about the running config.
+type liveState struct {
+	gateway      netip.AddrPort // valid when the running gateway is known
+	stale        bool
+	resolveError string
+}
+
+// liveGateway asks twarpd, else reads config.json (root only, 0600), else
+// only compares mtimes, which stat allows without read permission.
+func (s *Service) liveGateway(ctx context.Context, paths config.Paths) liveState {
+	if s.deps.Daemon != nil {
+		daemonCtx, cancel := context.WithTimeout(ctx, statusProbeTimeout)
+		live, err := s.deps.Daemon(daemonCtx)
+		cancel()
+		if err == nil && live != nil {
+			state := liveState{stale: live.Stale, resolveError: live.LastResolveError}
+			if addr, err := netip.ParseAddrPort(live.GatewayLive); err == nil {
+				state.gateway = addr
+			}
+			return state
+		}
+	}
+	var state liveState
+	appliedAt, err := AppliedAt(paths.OutConfig())
+	if err != nil {
+		return state // not installed
+	}
+	if running, err := ReadLiveConfig(paths.OutConfig()); err == nil {
+		state.gateway = running.Gateway
+	}
+	state.stale, _ = ConfigStale(paths, appliedAt)
+	return state
+}
+
+func checkLive(status *Status, live liveState) {
+	if live.resolveError != "" {
+		detail := live.resolveError
+		if live.gateway.IsValid() {
+			detail += "; running on " + live.gateway.String()
+		}
+		status.add(LevelWarn, "gateway", detail)
+	}
+	if live.stale {
+		status.add(LevelWarn, "config", "twarp.yaml or secrets.yaml changed after the last apply; run: twarp apply")
+	}
+}
+
+// checkGateway dials the SOCKS gateway sing-box actually uses (the live
+// address when known, else gateway.socks) and runs the SOCKS5 handshake, so
+// an unrelated service on the port does not pass. A gateway.socks literal
+// that differs from the live address is a warning, not OK: the running
+// config is out of date. With network it also CONNECTs through the gateway
+// to gateway.dns:53: a gateway that is up while its own upstream (the VPN on
+// the proxy host) is down answers "network unreachable". The periodic probe
+// stays at the handshake: the gateway logs every CONNECT.
+func (s *Service) checkGateway(ctx context.Context, status *Status, cfg config.Config, live liveState, creds *socksprobe.Credentials, network bool) {
+	status.GatewaySocks = cfg.Gateway.Socks
+	address := cfg.Gateway.Socks
+	reachable := address + " is reachable"
+	okLevel := LevelOK
+	if live.gateway.IsValid() {
+		address = live.gateway.String()
+		status.GatewayLive = address
+		configured, err := netip.ParseAddrPort(cfg.Gateway.Socks)
+		switch {
+		case err == nil && configured != live.gateway:
+			okLevel = LevelWarn
+			reachable = fmt.Sprintf("sing-box runs on %s, but twarp.yaml has %s; run: twarp apply", address, cfg.Gateway.Socks)
+		case err != nil:
+			reachable = fmt.Sprintf("configured %s → live %s is reachable", cfg.Gateway.Socks, address)
+		}
+	}
 	if s.deps.Dial == nil {
 		status.add(LevelFail, "gateway", "TCP dialer is unavailable")
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, statusProbeTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, statusProbeTimeout)
 	defer cancel()
-	connection, err := s.deps.Dial(ctx, "tcp", address)
+	connection, err := s.deps.Dial(probeCtx, "tcp", address)
 	if err != nil {
 		status.add(LevelFail, "gateway", fmt.Sprintf("%s is not reachable: %v", address, err))
 		return
 	}
-	_ = connection.Close()
+	defer func() { _ = connection.Close() }()
+	if err := socksprobe.Handshake(probeCtx, connection, creds); err != nil {
+		status.add(LevelFail, "gateway", fmt.Sprintf("%s: %v", address, err))
+		return
+	}
 	status.GatewayReachable = true
-	status.add(LevelOK, "gateway", address+" is reachable")
+	if !network {
+		status.add(okLevel, "gateway", reachable)
+		return
+	}
+	dns, err := netip.ParseAddr(cfg.Gateway.DNS)
+	if err != nil {
+		status.add(LevelFail, "gateway", fmt.Sprintf("gateway.dns %q is not an IP address", cfg.Gateway.DNS))
+		return
+	}
+	target := netip.AddrPortFrom(dns, 53)
+	connectCtx, cancelConnect := context.WithTimeout(ctx, egressProbeTimeout)
+	defer cancelConnect()
+	switch err := socksprobe.Connect(connectCtx, connection, target); {
+	case err == nil:
+		status.add(okLevel, "gateway", fmt.Sprintf("%s; connects to %s", reachable, target))
+	case errors.Is(err, socksprobe.ErrUpstreamDown):
+		status.add(LevelFail, "gateway", address+": upstream VPN is down")
+	default:
+		status.add(LevelFail, "gateway", fmt.Sprintf("%s is reachable, but CONNECT to %s failed: %v", address, target, err))
+	}
 }
 
 func (s *Service) checkTunnel(ctx context.Context, status *Status) {
@@ -186,7 +294,7 @@ func (s *Service) checkTunnel(ctx context.Context, status *Status) {
 			return
 		}
 		if state != sysexec.ServiceRunning {
-			status.add(LevelFail, "tunnel", fmt.Sprintf("stale route: %s %s holds the default route, but the sing-box service is not running; run: sudo twarp start", conflict.Interface, conflict.Addr))
+			status.add(LevelFail, "tunnel", fmt.Sprintf("stale route: %s %s holds the default route, but the sing-box service is not running; run: twarp up", conflict.Interface, conflict.Addr))
 			return
 		}
 		status.TunnelActive = true
@@ -231,7 +339,7 @@ func checkGeo(status *Status, directory string, now time.Time) {
 		info, err := os.Stat(filepath.Join(directory, source.Name))
 		if err != nil {
 			missing = true
-			status.add(LevelFail, "geo", fmt.Sprintf("%s is missing: sudo twarp geo update", source.Name))
+			status.add(LevelFail, "geo", fmt.Sprintf("%s is missing: twarp geo update", source.Name))
 			continue
 		}
 		if oldest.IsZero() || info.ModTime().Before(oldest) {
@@ -241,7 +349,7 @@ func checkGeo(status *Status, directory string, now time.Time) {
 		days := int(age / (24 * time.Hour))
 		detail := fmt.Sprintf("%s is %d days old", source.Name, days)
 		if age > geoWarningAge {
-			status.add(LevelWarn, "geo", detail+": sudo twarp geo update")
+			status.add(LevelWarn, "geo", detail+": twarp geo update")
 		} else {
 			status.add(LevelOK, "geo", detail)
 		}

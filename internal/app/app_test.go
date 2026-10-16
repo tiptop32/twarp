@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tiptop32/twarp/internal/config"
 )
 
 type testSys struct {
@@ -117,5 +121,34 @@ func TestLogsReturnsTail(t *testing.T) {
 	}
 	if strings.Join(lines, ",") != "line 4,line 5" {
 		t.Fatalf("lines = %v", lines)
+	}
+}
+
+func TestRenderInputsResolvesGatewayHostName(t *testing.T) {
+	service, base := newTestService(t, 501)
+	home := filepath.Join(base, "home")
+	configText := "gateway:\n  socks: proxyhost.local:8080\n  domains: [intra.example]\n  dns: 100.64.0.53\n"
+	if err := os.WriteFile(filepath.Join(home, "twarp.yaml"), []byte(configText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var lookedUp string
+	service.deps.LookupIP = func(_ context.Context, _, host string) ([]net.IP, error) {
+		lookedUp = host
+		return []net.IP{net.ParseIP("fe80::1"), net.ParseIP("192.0.2.10")}, nil
+	}
+	cfg, err := config.Load(filepath.Join(home, "twarp.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	socks, err := service.GatewaySOCKS(t.Context(), cfg)
+	if err != nil || socks != netip.MustParseAddrPort("192.0.2.10:8080") || lookedUp != "proxyhost.local" {
+		t.Fatalf("GatewaySOCKS() = (%v, %v), looked up %q; want 192.0.2.10:8080 via proxyhost.local", socks, err, lookedUp)
+	}
+
+	service.deps.LookupIP = func(context.Context, string, string) ([]net.IP, error) {
+		return nil, fmt.Errorf("no such host")
+	}
+	if _, err := service.GatewaySOCKS(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "proxyhost.local") {
+		t.Fatalf("GatewaySOCKS(failing resolver) error = %v, want the host in the error", err)
 	}
 }

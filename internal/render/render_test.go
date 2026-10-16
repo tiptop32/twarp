@@ -537,3 +537,75 @@ func TestOnChangeWriterSkipsWhenNotInstalled(t *testing.T) {
 		t.Fatalf("rules dir stat err = %v, want it not to be created", err)
 	}
 }
+
+func TestRenderGatewayCredentials(t *testing.T) {
+	out := t.TempDir()
+	createGeoRuleSets(t, out)
+
+	plain := renderFixture(t, out, render.Options{Inbound: render.InboundTUN})
+	var withoutAuth singbox.Config
+	if err := json.Unmarshal(plain, &withoutAuth); err != nil {
+		t.Fatal(err)
+	}
+	if gateway := outboundByTag(t, withoutAuth.Outbounds, "gateway"); gateway.Username != "" || gateway.Password != "" {
+		t.Fatalf("gateway outbound without credentials = %+v", gateway)
+	}
+
+	secrets := testSecrets(t)
+	secrets.GatewaySocksUser, secrets.GatewaySocksPassword = "proxy", "synthetic-gateway-pass"
+	data, err := render.Render(testConfig(), secrets, testPrefixes(), render.Options{Paths: config.Paths{Out: out}, Inbound: render.InboundTUN})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	var rendered singbox.Config
+	if err := json.Unmarshal(data, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	gateway := outboundByTag(t, rendered.Outbounds, "gateway")
+	if gateway.Username != "proxy" || gateway.Password != "synthetic-gateway-pass" {
+		t.Fatalf("gateway outbound = %+v, want the credentials", gateway)
+	}
+
+	if err := render.WriteRuleSet(filepath.Join(out, "rules"), testPrefixes()); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(out, "config.json")
+	if err := render.WriteConfig(configPath, data); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(singBox(t), "check", "--config", configPath).CombinedOutput(); err != nil {
+		t.Fatalf("sing-box check with gateway credentials: %v\n%s", err, output)
+	}
+}
+
+// A host name in gateway.socks renders exactly like the IP literal it
+// resolved to: the outbound dials the address and the direct /32 rule stays
+// third, ahead of the gateway rules.
+func TestRenderUsesResolvedGatewayAddress(t *testing.T) {
+	out := t.TempDir()
+	createGeoPlaceholders(t, out)
+	cfg := testConfig()
+	cfg.Gateway.Socks = "proxyhost.local:1080"
+
+	got, err := render.Render(cfg, testSecrets(t), testPrefixes(), render.Options{
+		Paths: config.Paths{Out: out}, Inbound: render.InboundTUN,
+		GatewaySocks: netip.MustParseAddrPort("192.0.2.10:1080"),
+	})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got = bytes.ReplaceAll(got, []byte(out), []byte("${OUT}"))
+	assertGolden(t, filepath.Join("testdata", "golden", "config.json"), got)
+
+	if _, err := render.Render(cfg, testSecrets(t), testPrefixes(), render.Options{Paths: config.Paths{Out: out}, Inbound: render.InboundTUN}); err == nil || !strings.Contains(err.Error(), "resolved first") {
+		t.Fatalf("Render(unresolved name) error = %v, want resolve hint", err)
+	}
+
+	rules, err := render.RouteRules(cfg, netip.MustParseAddrPort("192.0.2.10:1080"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) < 5 || !reflect.DeepEqual(rules[2].IPCIDR, []string{"192.0.2.10/32"}) || rules[2].Outbound != "direct" || rules[3].Outbound != "gateway" || rules[4].Outbound != "gateway" || !rules[5].IPIsPrivate {
+		t.Fatalf("route rules = %#v, want direct gateway host, then gateway rules, then ip_is_private", rules)
+	}
+}

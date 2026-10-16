@@ -11,7 +11,14 @@ const (
 	Label = "dev.twarp.singbox"
 	// GeoLabel is the per-user launchd service label for geo updates.
 	GeoLabel = "dev.twarp.geo"
+	// DaemonLabel is the system launchd service label for twarpd.
+	DaemonLabel = "dev.twarp.daemon"
 )
+
+// DaemonTarget returns the launchctl target for twarpd.
+func DaemonTarget() string {
+	return "system/" + DaemonLabel
+}
 
 // SystemTarget returns the launchctl target for the system sing-box service.
 func SystemTarget() string {

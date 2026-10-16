@@ -23,9 +23,10 @@ make install          # сборка и установка в /usr/local/bin (с
 mkdir -p ~/.config/twarp && $EDITOR ~/.config/twarp/twarp.yaml   # по примеру из раздела «Конфигурация»
 twarp import < key.txt
 twarp gateway add 100.64.10.0/24 --comment "dev network"
-sudo twarp install    # один раз; дальше включение и выключение:
-sudo twarp stop       # выключить туннель и автозапуск после перезагрузки
-sudo twarp start      # включить снова
+sudo twarp install    # один раз; дальше без пароля:
+twarp down            # выключить туннель и автозапуск после перезагрузки
+twarp up              # включить снова (apply + start)
+twarp                 # TUI
 twarp status
 ```
 
@@ -57,17 +58,17 @@ clash_api: 127.0.0.1:9090
 log_level: warn
 ```
 
-`gateway.socks` принимает только IP-литерал с портом, например `100.64.0.10:1080` или `[2001:db8::10]:1080`; имя хоста не поддерживается.
+`gateway.socks` принимает IP-литерал с портом (`100.64.0.10:1080`, `[2001:db8::10]:1080`) или имя хоста (`proxyhost.local:8080`). Имя резолвится системным резолвером, который видит и mDNS-имена `.local`, при `apply` и затем twarpd при каждой смене сети; берётся первый IPv4-адрес. IPv6-ответы не используются: mDNS первым отдаёт link-local, а типовой шлюз слушает только IPv4. Литерал не резолвится.
 
 `gateway.allowed_ranges` — список диапазонов, в которые разрешено добавлять адреса шлюза. CLI без `--force` и MCP принимают только CIDR, полностью лежащие внутри одного из этих диапазонов. MCP не умеет обходить это ограничение. Значение по умолчанию — `100.64.0.0/10`; его меняет только человек в `twarp.yaml`.
 
-`gateway.socks` принимает IP-адрес и порт; имя хоста не подходит. Для IPv6 используйте запись `[адрес]:порт`.
+Если SOCKS-шлюз требует логин и пароль, сохраните их через stdin, затем примените: `twarp gateway auth < creds.txt` (первая строка — пользователь, вторая — пароль), `twarp apply`. Креды хранятся в `secrets.yaml` (`gateway_socks_user`, `gateway_socks_password`), `twarp render` маскирует пароль. `twarp gateway auth --clear` удаляет их.
 
 Валидация также отклоняет loopback, link-local, multicast, broadcast, префиксы шире `/16` для IPv4 и `/48` для IPv6, а также префикс, содержащий IP SOCKS-шлюза. Максимум — 256 записей. CIDR с адресом хоста нормализуется, например `100.64.11.149/24` превращается в `100.64.11.0/24` с предупреждением.
 
 Секреты хранятся отдельно в `~/.config/twarp/secrets.yaml` с правами `0600`. Не добавляйте этот файл в git.
 
-После правки `twarp.yaml` или `secrets.yaml` примените изменения: `sudo twarp apply`. Список CIDR шлюза так применять не нужно, он перечитывается сам.
+После правки `twarp.yaml` или `secrets.yaml` примените изменения: `twarp apply`. Список CIDR шлюза так применять не нужно, он перечитывается сам. Если конфиг изменён после последнего apply, `twarp status` предупредит об этом.
 
 `apply` и `install` проверяют временный `config.json` через `sing-box check` до замены рабочего файла. При ошибке проверки прежний конфиг и запущенный sing-box сохраняются.
 
@@ -75,20 +76,26 @@ log_level: warn
 
 | Команда | Назначение |
 | --- | --- |
+| `twarp up` | Включить туннель: apply и start. Без sudo — через twarpd. |
+| `twarp down` | Выключить туннель и автозапуск после перезагрузки. Без sudo — через twarpd. |
+| `twarp` | Без аргументов в терминале открывает TUI, иначе печатает справку. |
 | `twarp import` | Прочитать VLESS URI только из stdin и сохранить секреты. Пример: `twarp import < key.txt`. Не запускать под sudo. |
 | `twarp render [--out DIR]` | Вывести замаскированный `config.json` или записать полный конфиг и `rules/gateway-ip.json` в `DIR`. |
-| `sudo twarp apply` | Перегенерировать конфиг, проверить его через sing-box, перезагрузить или запустить демон и обновить `/etc/resolver` для `gateway.domains`. |
-| `sudo twarp install` | Установить sing-box и geo launchd-демоны, rule-set'ы и ротацию логов. |
-| `sudo twarp start` | Включить туннель и автозапуск: загрузить установленный демон или перезапустить упавший. Откажет, если маршрут держит другой VPN. |
-| `sudo twarp stop` | Выключить туннель и автозапуск после перезагрузки, оставив всё установленным; маршрут возвращается к сети. `apply` обновит конфиг, но не запустит туннель. |
-| `sudo twarp uninstall` | Остановить и удалить launchd-демоны, plist и настройку ротации. Конфиги и правила сохраняются. |
+| `twarp apply` | Перегенерировать конфиг, проверить его через sing-box, перезагрузить или запустить демон и обновить `/etc/resolver` для `gateway.domains`. Без sudo — через twarpd. |
+| `sudo twarp install` | Установить sing-box, geo и twarpd launchd-демоны, rule-set'ы и ротацию логов. Единственная команда, которой нужен пароль. |
+| `twarp start` | Включить туннель и автозапуск: загрузить установленный демон или перезапустить упавший. Откажет, если маршрут держит другой VPN. Без sudo идёт через twarpd как `up` (с apply). |
+| `twarp stop` | Выключить туннель и автозапуск после перезагрузки, оставив всё установленным; маршрут возвращается к сети. `apply` обновит конфиг, но не запустит туннель. Без sudo — через twarpd. |
+| `sudo twarp uninstall` | Остановить и удалить launchd-демоны (включая twarpd и его сокет), plist и настройку ротации. Конфиги и правила сохраняются. |
 | `twarp gateway add <cidr> [--comment text] [--force]` | Добавить CIDR шлюза. `--force` снимает только проверку `allowed_ranges` и доступен только в CLI. Не запускать под sudo. |
 | `twarp gateway rm <cidr>` | Удалить CIDR шлюза. |
 | `twarp gateway ls` | Показать CIDR, автора, дату и комментарий. |
-| `sudo twarp geo update` | Скачать и обновить `geoip-ru.srs` и `geosite-category-ru.srs`. |
-| `twarp status [--net]` | Проверить sing-box, шлюз, TUN, CIDR и geo. `--net` добавляет проверку внешнего адреса. |
+| `twarp gateway auth [--clear]` | Сохранить из stdin (или удалить) логин и пароль SOCKS-шлюза. Не запускать под sudo. |
+| `twarp geo update` | Скачать и обновить `geoip-ru.srs` и `geosite-category-ru.srs`. Без sudo — через twarpd. |
+| `twarp status [--net]` | Проверить sing-box, шлюз, TUN, CIDR, geo и свежесть конфига. `--net` добавляет проверку внешнего адреса и пути через шлюз. |
 | `twarp tui` | Интерактивный дашборд: статус, маршруты, трафик, CIDR шлюза, логи. Не запускать под sudo. |
 | `twarp mcp` | Запустить MCP-сервер по stdio. Не запускать под sudo. |
+
+Проверка шлюза в `status` и TUI — SOCKS5-рукопожатие (с логином и паролем, если они заданы), а не просто открытый порт, и идёт на адрес, на котором реально работает sing-box. Если в `twarp.yaml` другой IP-литерал, строка шлюза — WARN с подсказкой `twarp apply`. `--net` (клавиша `n` в TUI) дополнительно делает CONNECT через шлюз на `gateway.dns:53`: ответ `network unreachable` означает, что шлюз жив, но его собственный VPN не поднят.
 
 `gateway add`, `gateway rm` и MCP атомарно обновляют пользовательский state и rule-set, затем дописывают запись в аудит. До `install` изменения только сохраняются; после установки rule-set перечитывается без перезапуска TUN. Доступны MCP-инструменты `gateway_ip_add`, `gateway_ip_remove` и `gateway_ip_list`.
 
@@ -112,12 +119,12 @@ MCP принимает только CIDR. `gateway_ip_list` показывает
 | `c` | Активные соединения из Clash API. |
 | `n` | Проверить внешний адрес через VPN (обращается к `ifconfig.me`). |
 | `R` | Обновить всё. |
-| `s` | Включить или выключить туннель (`sudo twarp start` / `stop`), с подтверждением. |
-| `a` | `sudo twarp apply`. |
-| `u` | `sudo twarp geo update`. |
+| `s` | Включить или выключить туннель (`twarp up` / `down`), с подтверждением. |
+| `a` | `twarp apply`. |
+| `u` | `twarp geo update`. |
 | `esc`, `?`, `q` | Назад, справка, выход. |
 
-TUI работает от пользователя. Для `s`, `a` и `u` он сворачивается, запускает тот же бинарь через `sudo` (там спрашивается пароль) и показывает результат. Бинарь и все каталоги над ним должны принадлежать root и не быть доступны на запись группе и остальным, иначе TUI откажется: sudo выполнил бы от root файл, который пользователь может подменить. Ставьте бинарь через `make install`. Если `/usr/local/bin` принадлежит пользователю (Homebrew на Intel), выполняйте эти команды в shell. Правки списка шлюза пишутся в аудит с `actor: tui`.
+TUI работает от пользователя. `s`, `a` и `u` идут через twarpd, не покидая экран. Если twarpd не запущен, TUI сворачивается, запускает тот же бинарь через `sudo` (там спрашивается пароль) и показывает результат. Бинарь и все каталоги над ним должны принадлежать root и не быть доступны на запись группе и остальным, иначе TUI откажется: sudo выполнил бы от root файл, который пользователь может подменить. Ставьте бинарь через `make install`. Если `/usr/local/bin` принадлежит пользователю (Homebrew на Intel), выполняйте эти команды в shell. Правки списка шлюза пишутся в аудит с `actor: tui`.
 
 ## Правила маршрутизации
 
@@ -134,6 +141,18 @@ TUI работает от пользователя. Для `s`, `a` и `u` он 
 9. Остальной трафик идёт через `vpn`.
 
 Правила шлюза стоят раньше `ip_is_private`. Иначе RFC1918-адрес шлюза попадёт в `direct`. Явно добавьте такие подсети и имена в конфиг и список шлюза.
+
+## Как работает twarpd
+
+twarpd — долгоживущий root-демон (`dev.twarp.daemon`, тот же `/usr/local/bin/twarp` в режиме `twarp daemon`), который ставит `sudo twarp install`.
+
+- **Сокет.** `/var/run/twarp/twarpd.sock`, права `0666`. Доступ решает не файл, а ядро: для каждого соединения демон читает uid процесса на другом конце (`LOCAL_PEERCRED`) и отвечает только владельцу, записанному в plist при install, и root. Остальным — `forbidden` и запись в root-аудит.
+- **Что демон может.** Только фиксированные операции: `up`, `down`, `apply`, `geo_update`, `status`. От клиента не принимается никаких путей и данных, поэтому через сокет можно сделать не больше, чем владелец сделал бы через `sudo twarp start|stop|apply`. Все операции идут по одной, без параллели.
+- **Смена сети.** Демон слушает routing socket (новый адрес, интерфейс, default route; пачка событий за 2 с — одна проверка) и раз в 30 с проверяет на всякий случай. Если `gateway.socks` — имя, оно резолвится заново (вне очереди операций, чтобы `twarp up`/`down` не ждали сеть); если адрес отличается от работающего `config.json`, демон делает `apply` (актор `daemon-net` в аудите) и пишет в `twarpd.log` строку `gateway address changed old=… new=…`. Ошибка резолва не трогает работающий конфиг и видна в `twarp status`. IP-литерал не резолвится.
+- **Бинарь.** Демон отказывается стартовать, если бинарь или каталоги над ним может изменить не-root: ставьте его через `make install`.
+- **Без демона.** `sudo twarp start|stop|apply|install` работают напрямую, как раньше. Если демон не отвечает, CLI подсказывает `sudo launchctl kickstart system/dev.twarp.daemon`.
+
+Сквозное время восстановления после смены Wi-Fi определяет не только twarpd (новый адрес в `config.json` за секунды), но и сам шлюз: прокси-хосту нужно переподключить свой VPN.
 
 ## DNS и ограничения
 
@@ -160,7 +179,9 @@ TUI работает от пользователя. Для `s`, `a` и `u` он 
 | Конфиг sing-box | `/usr/local/etc/twarp/config.json` (`0600`, root) |
 | Горячий rule-set шлюза | `/usr/local/etc/twarp/rules/gateway-ip.json` (владелец — пользователь) |
 | Geo rule-set'ы | `/usr/local/etc/twarp/geo/*.srs` (root) |
-| launchd | `/Library/LaunchDaemons/dev.twarp.singbox.plist`, `/Library/LaunchDaemons/dev.twarp.geo.plist` |
+| launchd | `/Library/LaunchDaemons/dev.twarp.singbox.plist`, `/Library/LaunchDaemons/dev.twarp.geo.plist`, `/Library/LaunchDaemons/dev.twarp.daemon.plist` |
+| Сокет twarpd | `/var/run/twarp/twarpd.sock` (`TWARP_SOCKET` для тестов) |
+| Лог twarpd | `/usr/local/var/log/twarp/twarpd.log` |
 | Лог sing-box | `/usr/local/var/log/twarp/sing-box.log` |
 | Логи geo updater | `/usr/local/var/log/twarp/geo-update.log`, `/usr/local/var/log/twarp/geo-update.err.log` |
 | Root-аудит | `/usr/local/var/log/twarp/audit.jsonl` |
@@ -179,11 +200,15 @@ TUI работает от пользователя. Для `s`, `a` и `u` он 
 
 **Установка сообщает о другом `utun`.** Завершите прежний VPN-клиент, проверьте `route -n get 192.0.2.1`, затем повторите `sudo twarp install`. twarp не забирает default route у чужого VPN автоматически.
 
-**Домен шлюза не резолвится (`Could not resolve host`).** Выполните `sudo twarp apply` и посмотрите, нет ли домена в строке `not managed by twarp`. Затем `cat /etc/resolver/<домен>` должен показать `nameserver 172.19.0.2`, а `dscacheutil -q host -a name <имя>` — адрес.
+**Домен шлюза не резолвится (`Could not resolve host`).** Выполните `twarp apply` и посмотрите, нет ли домена в строке `not managed by twarp`. Затем `cat /etc/resolver/<домен>` должен показать `nameserver 172.19.0.2`, а `dscacheutil -q host -a name <имя>` — адрес.
 
 **DNS не отвечает или утекает.** Проверьте адреса DNS в `twarp.yaml`, доступность DNS шлюза по TCP через SOCKS и вывод `twarp status`. Для проверки на живой машине используйте `sudo scripts/smoke.sh --leak-check`; интерфейс можно задать через `--iface IFACE`, а ISP IPv6-префикс — через `--isp-v6-prefix CIDR`.
 
-**Geo-файлы отсутствуют или устарели.** Выполните `sudo twarp geo update`, затем `twarp status`. `install` скачивает geo-файлы, если их ещё нет.
+**Geo-файлы отсутствуют или устарели.** Выполните `twarp geo update`, затем `twarp status`. `install` скачивает geo-файлы, если их ещё нет.
+
+**`twarpd is not running`.** Запустите демон: `sudo launchctl kickstart system/dev.twarp.daemon`, причины смотрите в `/usr/local/var/log/twarp/twarpd.log`. Если демон не установлен (обновление со старой версии), выполните один раз `sudo twarp install`.
+
+**Шлюз сменил адрес после переключения Wi-Fi.** Используйте имя хоста в `gateway.socks` (например, `proxyhost.local:8080`) — twarpd переприменит конфиг сам. С IP-литералом поправьте `twarp.yaml` и выполните `twarp apply`; `twarp status` покажет, на каком адресе sing-box работает сейчас.
 
 **Нужно увидеть диагностику.** Смотрите `/usr/local/var/log/twarp/sing-box.log`, `/usr/local/var/log/twarp/geo-update.log`, `/usr/local/var/log/twarp/geo-update.err.log` и root-аудит. Изменения списка шлюза смотрите в `~/.config/twarp/audit.jsonl`. Для общего состояния запустите `twarp status`; для проверки маршрута — `scripts/smoke.sh --gateway-host gateway.example`.
 
@@ -200,6 +225,8 @@ sudo twarp uninstall
 Для однопользовательской macOS-машины принят следующий риск: root-демон sing-box читает user-writable `/usr/local/etc/twarp/rules/gateway-ip.json`, а бинарь берётся из user-writable `/opt/homebrew`. Любой процесс этого пользователя может заменить rule-set напрямую и обойти проверки `twarp` или подменить бинарь через Homebrew.
 
 Geo-файлы и основной `config.json` хранятся в root-каталоге, поэтому пользовательский rule-set не может подменить geo-данные и отправить весь трафик в `direct`. Это не защищает однопользовательскую машину от уже скомпрометированного пользователя: риск принят ради MCP-изменений без sudo.
+
+twarpd открывает владельцу root-операции без пароля. Граница — uid владельца, проверяемый ядром: другой локальный пользователь получает отказ. Процесс самого владельца может включить, выключить и переприменить туннель, но не может передать демону ни пути, ни данные.
 
 Не передавайте ключи в аргументах командной строки и не коммитьте их. Используйте `twarp import` через stdin и синтетические данные в тестах.
 

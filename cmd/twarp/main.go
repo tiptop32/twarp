@@ -13,6 +13,7 @@ import (
 
 	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/config"
+	"github.com/tiptop32/twarp/internal/ipc"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/resolver"
 	"github.com/tiptop32/twarp/internal/singbox"
@@ -26,14 +27,16 @@ type command struct {
 }
 
 var commands = []command{
+	{"up", "turn the tunnel on (apply and start)"},
+	{"down", "turn the tunnel off"},
 	{"import", "import a VPN URI as the vpn outbound"},
 	{"render", "render sing-box config.json"},
 	{"apply", "render, check and hot-reload sing-box"},
 	{"install", "install the sing-box launchd daemon"},
 	{"uninstall", "remove the sing-box launchd daemon"},
-	{"start", "turn the tunnel on (sudo)"},
-	{"stop", "turn the tunnel off, keep it installed (sudo)"},
-	{"gateway", "manage gateway CIDRs"},
+	{"start", "turn the tunnel on without re-applying"},
+	{"stop", "turn the tunnel off, keep it installed"},
+	{"gateway", "manage gateway CIDRs and SOCKS credentials"},
 	{"geo", "update geoip/geosite rule-sets"},
 	{"status", "show daemon and routing status"},
 	{"tui", "interactive status, gateway and connections view"},
@@ -58,6 +61,11 @@ type cliDeps struct {
 	LookupIP     func(context.Context, string, string) ([]net.IP, error)
 	Now          func() time.Time
 	MCPTransport mcpTransportFactory
+	// IPC calls twarpd; nil uses the socket.
+	IPC func(context.Context, ipc.Request) (ipc.Response, error)
+	// IsTerminal reports whether w is a terminal (twarp without arguments
+	// opens the TUI there).
+	IsTerminal func(w io.Writer) bool
 }
 
 func defaultCLIDeps() cliDeps {
@@ -75,6 +83,10 @@ func defaultCLIDeps() cliDeps {
 		HTTPClient:  httpClient,
 		LookupIP:    net.DefaultResolver.LookupIP,
 		Now:         time.Now,
+		IsTerminal:  isTerminal,
+		IPC: func(ctx context.Context, request ipc.Request) (ipc.Response, error) {
+			return ipc.Call(ctx, ipc.SocketPath(os.Getenv), request)
+		},
 		MCPTransport: func(io.Reader, io.Writer) mcpTransport {
 			return stdioMCPTransport()
 		},
@@ -90,7 +102,7 @@ func (deps cliDeps) app(actor string) *app.Service {
 	return app.New(app.Deps{
 		Sys: deps.Sys, Runner: deps.Runner, FS: deps.FS, Dial: deps.Dial,
 		HTTPClient: deps.HTTPClient, LookupIP: deps.LookupIP, Now: deps.Now, Clash: deps.Clash,
-		ResolverDir: deps.ResolverDir,
+		ResolverDir: deps.ResolverDir, Daemon: deps.daemonLive,
 	}, actor)
 }
 
@@ -101,6 +113,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if len(args) == 0 {
+		if deps.IsTerminal != nil && deps.IsTerminal(stdout) && deps.Sys.Geteuid() != 0 {
+			return runTUI(nil, stdout, stderr, deps)
+		}
 		usage(stdout)
 		return 0
 	}
@@ -108,6 +123,10 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	case "help", "-h", "-help", "--help":
 		usage(stdout)
 		return 0
+	case "up":
+		return runUp(args[1:], stdout, stderr, deps)
+	case "down":
+		return runDown(args[1:], stdout, stderr, deps)
 	case "import":
 		return runImport(args[1:], stdout, stderr, deps)
 	case "render":
@@ -125,21 +144,35 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	case "gateway":
 		return runGateway(args[1:], stdout, stderr, deps)
 	case "geo":
-		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: deps.Sys})
+		return runGeo(args[1:], stdout, stderr, geoDeps{Sys: deps.Sys, CLI: deps})
 	case "status":
 		return runStatus(args[1:], stdout, stderr, deps)
 	case "tui":
 		return runTUI(args[1:], stdout, stderr, deps)
 	case "mcp":
 		return runMCP(args[1:], stdout, stderr, deps)
+	case "daemon":
+		// hidden: launchd runs it as dev.twarp.daemon
+		return runDaemon(args[1:], stdout, stderr, deps)
 	}
 	_, _ = fmt.Fprintf(stderr, "twarp: unknown command %q\n\n", args[0])
 	usage(stderr)
 	return 2
 }
 
+// isTerminal reports whether w is a character device.
+func isTerminal(w io.Writer) bool {
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
 func usage(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "Usage: twarp <command> [flags]")
+	_, _ = fmt.Fprintln(w, "Usage: twarp [command] [flags]")
+	_, _ = fmt.Fprintln(w, "Without a command in a terminal, twarp opens the TUI.")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Commands:")
 	for _, c := range commands {

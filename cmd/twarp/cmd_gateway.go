@@ -18,8 +18,11 @@ func runGateway(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return 1
 	}
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "Usage: twarp gateway add|rm|ls")
+		_, _ = fmt.Fprintln(stderr, "Usage: twarp gateway add|rm|ls|auth")
 		return 2
+	}
+	if args[0] == "auth" {
+		return runGatewayAuth(args[1:], stdout, stderr, deps)
 	}
 
 	gateway, err := deps.app(app.ActorCLI).Gateway()

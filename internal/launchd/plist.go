@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"path/filepath"
+	"strconv"
 
 	"github.com/tiptop32/twarp/internal/config"
 )
@@ -15,6 +16,8 @@ const (
 	SingBoxPlistPath = "/Library/LaunchDaemons/dev.twarp.singbox.plist"
 	// GeoPlistPath is the system launch daemon definition for daily geo updates.
 	GeoPlistPath = "/Library/LaunchDaemons/dev.twarp.geo.plist"
+	// DaemonPlistPath is the system launch daemon definition for twarpd.
+	DaemonPlistPath = "/Library/LaunchDaemons/dev.twarp.daemon.plist"
 	// NewsyslogPath is the twarp log rotation definition.
 	NewsyslogPath = "/etc/newsyslog.d/twarp.conf"
 	logDir        = "/usr/local/var/log/twarp"
@@ -82,11 +85,56 @@ func GeoPlist(executable, out string) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+// Owner is the account twarpd works for, recorded at install.
+type Owner struct {
+	UID  int
+	GID  int
+	User string
+}
+
+// DaemonPlist renders twarpd: twarp itself in daemon mode, kept alive by
+// launchd. The owner recorded here is the only non-root uid its socket
+// serves, and whose home it reads.
+func DaemonPlist(executable, out string, owner Owner) ([]byte, error) {
+	if !filepath.IsAbs(executable) {
+		return nil, errors.New("twarp executable path must be absolute")
+	}
+	if !filepath.IsAbs(out) {
+		return nil, errors.New("twarp output directory must be absolute")
+	}
+	if owner.User == "" || owner.UID <= 0 || owner.GID < 0 {
+		return nil, errors.New("twarpd owner must be a non-root user")
+	}
+
+	var output bytes.Buffer
+	output.WriteString(plistHeader)
+	writeKeyString(&output, "Label", "dev.twarp.daemon", 2)
+	output.WriteString("  <key>ProgramArguments</key>\n  <array>\n")
+	for _, argument := range []string{executable, "daemon"} {
+		writeString(&output, argument, 4)
+	}
+	output.WriteString("  </array>\n")
+	output.WriteString("  <key>EnvironmentVariables</key>\n  <dict>\n")
+	writeKeyString(&output, "TWARP_OUT", out, 4)
+	writeKeyString(&output, "TWARP_OWNER_UID", strconv.Itoa(owner.UID), 4)
+	writeKeyString(&output, "TWARP_OWNER_GID", strconv.Itoa(owner.GID), 4)
+	writeKeyString(&output, "TWARP_OWNER_USER", owner.User, 4)
+	output.WriteString("  </dict>\n")
+	output.WriteString("  <key>RunAtLoad</key>\n  <true/>\n")
+	output.WriteString("  <key>KeepAlive</key>\n  <true/>\n")
+	writeKeyString(&output, "WorkingDirectory", workingDir, 2)
+	writeKeyString(&output, "StandardOutPath", filepath.Join(logDir, "twarpd.log"), 2)
+	writeKeyString(&output, "StandardErrorPath", filepath.Join(logDir, "twarpd.log"), 2)
+	output.WriteString("</dict>\n</plist>\n")
+	return output.Bytes(), nil
+}
+
 // NewsyslogConfig returns twarp's log rotation rules.
 func NewsyslogConfig() []byte {
 	return []byte("/usr/local/var/log/twarp/sing-box.log 644 5 1024 * NJ\n" +
 		"/usr/local/var/log/twarp/geo-update.log 644 5 1024 * NJ\n" +
-		"/usr/local/var/log/twarp/geo-update.err.log 644 5 1024 * NJ\n")
+		"/usr/local/var/log/twarp/geo-update.err.log 644 5 1024 * NJ\n" +
+		"/usr/local/var/log/twarp/twarpd.log 644 5 1024 * NJ\n")
 }
 
 func writeKeyString(output *bytes.Buffer, key, value string, indent int) {

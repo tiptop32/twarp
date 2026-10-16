@@ -40,6 +40,9 @@ type Options struct {
 	Inbound   string
 	MixedPort uint16
 	Outbounds map[string]singbox.Outbound
+	// GatewaySocks is the resolved gateway.socks endpoint (see gwaddr). When
+	// unset, gateway.socks must be an IP literal.
+	GatewaySocks netip.AddrPort
 }
 
 // Render returns a complete sing-box configuration as indented JSON.
@@ -54,10 +57,11 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 	if err != nil {
 		return nil, err
 	}
-	host, port, socksPrefix, err := parseGatewaySOCKS(cfg.Gateway.Socks)
+	socks, err := gatewayEndpoint(cfg, opts.GatewaySocks)
 	if err != nil {
 		return nil, err
 	}
+	host, port, socksPrefix := socks.Addr().String(), socks.Port(), hostPrefix(socks.Addr())
 	vpn, err := uri.Parse(secrets.VPNURI)
 	if err != nil {
 		return nil, fmt.Errorf("parse VPN URI: %w", err)
@@ -73,7 +77,10 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 
 	outbounds := []singbox.Outbound{
 		{Type: "direct", Tag: "direct"},
-		{Type: "socks", Tag: "gateway", Server: host, ServerPort: port, Version: "5"},
+		{
+			Type: "socks", Tag: "gateway", Server: host, ServerPort: port, Version: "5",
+			Username: secrets.GatewaySocksUser, Password: secrets.GatewaySocksPassword,
+		},
 		vpn,
 	}
 	for i := range outbounds {
@@ -139,12 +146,12 @@ func dnsRules(cfg config.Config) []singbox.DNSRule {
 
 // RouteRules returns the route rules Render writes, in order, so front ends can
 // show the routing that sing-box actually runs. The final outbound is vpn.
-func RouteRules(cfg config.Config) ([]singbox.RouteRule, error) {
-	_, _, socksPrefix, err := parseGatewaySOCKS(cfg.Gateway.Socks)
+func RouteRules(cfg config.Config, gatewaySocks netip.AddrPort) ([]singbox.RouteRule, error) {
+	socks, err := gatewayEndpoint(cfg, gatewaySocks)
 	if err != nil {
 		return nil, err
 	}
-	return routeRules(cfg, socksPrefix), nil
+	return routeRules(cfg, hostPrefix(socks.Addr())), nil
 }
 
 // routeRules keeps the gateway rules ahead of ip_is_private: gateway hosts in
@@ -195,25 +202,30 @@ func renderInbound(opts Options) (singbox.Inbound, error) {
 	}
 }
 
-func parseGatewaySOCKS(address string) (string, uint16, string, error) {
-	host, portText, err := net.SplitHostPort(address)
+// gatewayEndpoint returns the resolved endpoint, or parses gateway.socks
+// when the caller did not resolve it (IP literals only).
+func gatewayEndpoint(cfg config.Config, resolved netip.AddrPort) (netip.AddrPort, error) {
+	if resolved.IsValid() {
+		return netip.AddrPortFrom(resolved.Addr().Unmap(), resolved.Port()), nil
+	}
+	host, portText, err := net.SplitHostPort(cfg.Gateway.Socks)
 	if err != nil {
-		return "", 0, "", fmt.Errorf("parse gateway SOCKS address: %w", err)
+		return netip.AddrPort{}, fmt.Errorf("parse gateway SOCKS address: %w", err)
 	}
 	port, err := strconv.ParseUint(portText, 10, 16)
 	if err != nil || port == 0 {
-		return "", 0, "", errors.New("parse gateway SOCKS address: invalid port")
+		return netip.AddrPort{}, errors.New("parse gateway SOCKS address: invalid port")
 	}
 	addressIP, err := netip.ParseAddr(host)
 	if err != nil {
-		return "", 0, "", errors.New("gateway SOCKS host must be an IP address")
+		return netip.AddrPort{}, errors.New("gateway SOCKS host must be an IP address or resolved first")
 	}
-	addressIP = addressIP.Unmap()
-	bits := 128
-	if addressIP.Is4() {
-		bits = 32
-	}
-	return host, uint16(port), netip.PrefixFrom(addressIP, bits).String(), nil
+	return netip.AddrPortFrom(addressIP.Unmap(), uint16(port)), nil
+}
+
+// hostPrefix is the single-address prefix of addr (/32 or /128).
+func hostPrefix(addr netip.Addr) string {
+	return netip.PrefixFrom(addr, addr.BitLen()).String()
 }
 
 func checkGeoRuleSets(paths config.Paths) error {

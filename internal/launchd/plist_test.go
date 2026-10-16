@@ -36,6 +36,36 @@ func TestGeoPlistGolden(t *testing.T) {
 	assertGolden(t, "dev.twarp.geo.plist", got)
 }
 
+func TestDaemonPlistGolden(t *testing.T) {
+	t.Parallel()
+
+	got, err := launchd.DaemonPlist("/usr/local/bin/twarp", "/usr/local/etc/twarp", launchd.Owner{UID: 501, GID: 20, User: "alice"})
+	if err != nil {
+		t.Fatalf("DaemonPlist() error = %v", err)
+	}
+	assertGolden(t, "dev.twarp.daemon.plist", got)
+}
+
+func TestDaemonPlistRejectsBadInput(t *testing.T) {
+	t.Parallel()
+
+	for name, call := range map[string]func() ([]byte, error){
+		"relative executable": func() ([]byte, error) {
+			return launchd.DaemonPlist("twarp", "/usr/local/etc/twarp", launchd.Owner{UID: 501, GID: 20, User: "alice"})
+		},
+		"root owner": func() ([]byte, error) {
+			return launchd.DaemonPlist("/usr/local/bin/twarp", "/usr/local/etc/twarp", launchd.Owner{UID: 0, GID: 0, User: "root"})
+		},
+		"no owner name": func() ([]byte, error) {
+			return launchd.DaemonPlist("/usr/local/bin/twarp", "/usr/local/etc/twarp", launchd.Owner{UID: 501, GID: 20})
+		},
+	} {
+		if _, err := call(); err == nil {
+			t.Errorf("%s: DaemonPlist() error = nil", name)
+		}
+	}
+}
+
 func TestGeoPlistPassesCustomOutputDirectory(t *testing.T) {
 	t.Parallel()
 	got, err := launchd.GeoPlist("/usr/local/bin/twarp", "/tmp/twarp-custom")

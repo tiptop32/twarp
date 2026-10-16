@@ -30,15 +30,21 @@ var (
 	bootstrapCall = sysexec.Call{Name: "launchctl", Args: []string{"bootstrap", "system", launchd.SingBoxPlistPath}}
 )
 
-func TestRunStartAndStopRequireRoot(t *testing.T) {
-	for _, command := range []string{"start", "stop"} {
+func TestRunStartAndStopWithoutRootGoThroughDaemon(t *testing.T) {
+	for command, op := range map[string]string{"start": "up", "stop": "down"} {
 		fixture := newCLIRenderFixture(t, 0)
 		fixture.deps.Sys = cliTestSys{euid: 501, env: map[string]string{}}
-		fixture.deps.Runner = &sysexec.Fake{}
+		runner := &sysexec.Fake{}
+		fixture.deps.Runner = runner
 		fixture.deps.FS = &cliFakeFS{}
-		_, stderr, code := runCLIForTest([]string{command}, fixture.deps)
-		if code != 1 || !strings.Contains(stderr, "run with sudo") {
-			t.Fatalf("%s as user = (%d, %q), want run with sudo", command, code, stderr)
+		daemon := &fakeDaemon{summary: command + " done"}
+		fixture.deps.IPC = daemon.call
+		stdout, stderr, code := runCLIForTest([]string{command}, fixture.deps)
+		if code != 0 || stdout != command+" done\n" || stderr != "" || daemon.ops() != op {
+			t.Fatalf("%s as user = (%d, %q, %q), ops %q; want %s through twarpd", command, code, stdout, stderr, daemon.ops(), op)
+		}
+		if len(runner.Calls) != 0 {
+			t.Fatalf("%s as user ran commands directly: %v", command, runner.Calls)
 		}
 	}
 }

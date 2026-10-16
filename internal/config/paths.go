@@ -75,22 +75,53 @@ func Resolve(system Sys) (Paths, error) {
 	return Paths{Home: home, Out: out, SingBox: singBox}, nil
 }
 
-// SudoOwner returns the original user's numeric owner when sudo supplied both values.
+// Owner returns the account that owns the twarp home under root: the sudo
+// caller (SUDO_UID/SUDO_GID/SUDO_USER) or, for twarpd, the owner recorded in
+// its launchd plist at install (TWARP_OWNER_UID/GID/USER). sudo wins. ok is
+// false when neither source supplies valid numeric IDs.
+func Owner(system Sys) (uid, gid int, name string, ok bool) {
+	if uid, gid, ok := ownerIDs(system, "SUDO_UID", "SUDO_GID"); ok {
+		return uid, gid, system.Getenv("SUDO_USER"), true
+	}
+	if uid, gid, ok := ownerIDs(system, "TWARP_OWNER_UID", "TWARP_OWNER_GID"); ok {
+		return uid, gid, system.Getenv("TWARP_OWNER_USER"), true
+	}
+	return 0, 0, "", false
+}
+
+// SudoOwner returns the numeric owner from Owner.
 func SudoOwner(system Sys) (uid, gid int, ok bool) {
-	uid, err := strconv.Atoi(system.Getenv("SUDO_UID"))
+	uid, gid, _, ok = Owner(system)
+	return uid, gid, ok
+}
+
+func ownerIDs(system Sys, uidKey, gidKey string) (int, int, bool) {
+	uid, err := strconv.Atoi(system.Getenv(uidKey))
 	if err != nil || uid < 0 {
 		return 0, 0, false
 	}
-	gid, err = strconv.Atoi(system.Getenv("SUDO_GID"))
+	gid, err := strconv.Atoi(system.Getenv(gidKey))
 	if err != nil || gid < 0 {
 		return 0, 0, false
 	}
 	return uid, gid, true
 }
 
+// ownerName is the user whose home root works in: SUDO_USER, else the
+// twarpd owner.
+func ownerName(system Sys) string {
+	if name := system.Getenv("SUDO_USER"); name != "" {
+		return name
+	}
+	if _, _, ok := ownerIDs(system, "TWARP_OWNER_UID", "TWARP_OWNER_GID"); ok {
+		return system.Getenv("TWARP_OWNER_USER")
+	}
+	return ""
+}
+
 func resolveHome(system Sys) (string, error) {
-	if system.Geteuid() == 0 && system.Getenv("SUDO_USER") == "" {
-		return "", errors.New("run via sudo from your user account; SUDO_USER is empty")
+	if system.Geteuid() == 0 && ownerName(system) == "" {
+		return "", errors.New("run via sudo from your user account or through twarpd; SUDO_USER is empty")
 	}
 	if override := system.Getenv("TWARP_HOME"); override != "" {
 		return override, nil
@@ -98,10 +129,10 @@ func resolveHome(system Sys) (string, error) {
 
 	var home string
 	if system.Geteuid() == 0 {
-		sudoUser := system.Getenv("SUDO_USER")
-		account, err := system.LookupUser(sudoUser)
+		owner := ownerName(system)
+		account, err := system.LookupUser(owner)
 		if err != nil {
-			return "", fmt.Errorf("look up SUDO_USER %q: %w", sudoUser, err)
+			return "", fmt.Errorf("look up owner %q: %w", owner, err)
 		}
 		home = account.HomeDir
 	} else {

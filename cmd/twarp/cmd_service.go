@@ -6,12 +6,17 @@ import (
 	"io"
 
 	"github.com/tiptop32/twarp/internal/app"
+	"github.com/tiptop32/twarp/internal/ipc"
 )
 
 // runStart turns the tunnel on without reinstalling; see app.Service.Start.
 func runStart(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if code, done := parseNoArgs("start", args, stderr); done {
 		return code
+	}
+	if deps.Sys.Geteuid() != 0 {
+		// twarpd has no bare start: up applies first, which is harmless
+		return runViaDaemon("start", ipc.OpUp, stdout, stderr, deps)
 	}
 	message, err := deps.app(app.ActorCLI).Start(context.Background())
 	if err != nil {
@@ -25,6 +30,9 @@ func runStart(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 func runStop(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if code, done := parseNoArgs("stop", args, stderr); done {
 		return code
+	}
+	if deps.Sys.Geteuid() != 0 {
+		return runViaDaemon("stop", ipc.OpDown, stdout, stderr, deps)
 	}
 	message, err := deps.app(app.ActorCLI).Stop(context.Background())
 	if err != nil {

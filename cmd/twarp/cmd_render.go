@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,7 +28,7 @@ func runRender(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return 2
 	}
 
-	_, prefixes, data, err := deps.app(app.ActorCLI).RenderInputs()
+	_, prefixes, data, err := deps.app(app.ActorCLI).RenderInputs(context.Background())
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp render: %v\n", err)
 		return 1
@@ -67,7 +68,7 @@ func maskRenderedSecrets(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	maskJSONKeys(document, map[string]struct{}{
-		"uuid": {}, "public_key": {}, "short_id": {}, "secret": {},
+		"uuid": {}, "public_key": {}, "short_id": {}, "secret": {}, "password": {},
 	})
 	return marshalDocument(document)
 }
