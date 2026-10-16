@@ -60,9 +60,9 @@ func runGatewayAuth(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return 1
 	}
 	if *clearAuth {
-		_, _ = fmt.Fprintln(stdout, "removed gateway SOCKS credentials; apply them: sudo twarp apply")
+		_, _ = fmt.Fprintln(stdout, "removed gateway SOCKS credentials; apply them: twarp apply")
 	} else {
-		_, _ = fmt.Fprintf(stdout, "saved gateway SOCKS credentials for user %s; apply them: sudo twarp apply\n", secrets.GatewaySocksUser)
+		_, _ = fmt.Fprintf(stdout, "saved gateway SOCKS credentials for user %s; apply them: twarp apply\n", secrets.GatewaySocksUser)
 	}
 	return 0
 }

@@ -55,8 +55,11 @@ func TestRunUninstallUsesLaunchdUninstallAndKeepsData(t *testing.T) {
 	fixture := newCLIRenderFixture(t, 0)
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: errors.New("Could not find service")}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.geo"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.geo"}}, Response: sysexec.Response{Err: errors.New("Could not find service")}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.daemon"}}, Response: sysexec.Response{Err: errors.New("Could not find service")}},
 	}}
 	filesystem := &cliFakeFS{}
 	fixture.deps.Runner = runner

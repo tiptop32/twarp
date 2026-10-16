@@ -3,7 +3,9 @@ package sysexec_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
@@ -80,13 +82,6 @@ func TestLaunchctlHelpersUseExactArgv(t *testing.T) {
 				return sysexec.Bootstrap(ctx, runner, "system", "/Library/LaunchDaemons/dev.twarp.singbox.plist")
 			},
 			args: []string{"bootstrap", "system", "/Library/LaunchDaemons/dev.twarp.singbox.plist"},
-		},
-		{
-			name: "bootout",
-			call: func(ctx context.Context, runner sysexec.Runner) error {
-				return sysexec.Bootout(ctx, runner, sysexec.GUITarget(501))
-			},
-			args: []string{"bootout", "gui/501/dev.twarp.geo"},
 		},
 		{
 			name: "kill",
@@ -193,5 +188,42 @@ func TestBootoutDoesNotHideIOError(t *testing.T) {
 
 	if err := sysexec.Bootout(context.Background(), fake, sysexec.GUITarget(501)); !errors.Is(err, ioErr) {
 		t.Fatalf("Bootout() error = %v, want %v", err, ioErr)
+	}
+}
+
+var errNotFound = errors.New("launchctl print: exit status 113: Could not find service")
+
+// launchctl bootout can return while launchd is still removing the service;
+// a bootstrap in that window fails with "5: Input/output error". Bootout must
+// not return until print reports the service gone.
+func TestBootoutWaitsUntilServiceRemoved(t *testing.T) {
+	fake := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Output: []byte("state = running\n")}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Output: []byte("state = not running\n")}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: errNotFound}},
+	}}
+	if err := sysexec.Bootout(context.Background(), fake, sysexec.SystemTarget()); err != nil {
+		t.Fatalf("Bootout() error = %v, want nil", err)
+	}
+	if err := fake.Verify(); err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+}
+
+func TestBootoutFailsWhenServiceStaysLoaded(t *testing.T) {
+	expect := []sysexec.ExpectedCall{{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "gui/501/dev.twarp.geo"}}}}
+	for range 100 {
+		expect = append(expect, sysexec.ExpectedCall{
+			Call:     sysexec.Call{Name: "launchctl", Args: []string{"print", "gui/501/dev.twarp.geo"}},
+			Response: sysexec.Response{Output: []byte("state = running\n")},
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+
+	err := sysexec.Bootout(ctx, &sysexec.Fake{Expect: expect}, sysexec.GUITarget(501))
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "did not remove gui/501/dev.twarp.geo") {
+		t.Fatalf("Bootout() error = %v, want removal timeout", err)
 	}
 }
