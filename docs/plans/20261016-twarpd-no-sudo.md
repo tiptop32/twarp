@@ -262,14 +262,15 @@ type LiveStatus struct {
 **Files:**
 - Modify: `internal/config/config.go`, `internal/config/config_test.go`
 - Modify: `internal/singbox/types.go`, `internal/render/render.go`, `internal/render/render_test.go` (+ golden)
-- Create: `cmd/twarp/cmd_gateway_auth.go` (или подкоманда в `cmd_gateway.go`) + тест
+- Create: `cmd/twarp/cmd_gateway_auth.go` + `cmd_gateway_auth_test.go`
 
-- [ ] `Secrets.GatewaySocksUser`/`GatewaySocksPassword`, валидация «только парой»
-- [ ] `singbox.Outbound.Username`/`Password` (`omitempty`); `render` заполняет их для `gateway`
-- [ ] маскирование пароля в выводе `twarp render`
-- [ ] `twarp gateway auth`: читает `user` и `password` из stdin, сохраняет `secrets.yaml` (`0600`); `--clear` удаляет; не под sudo
-- [ ] тесты: golden с синтетическими кредами; без кредов outbound не меняется; маскирование; только user → ошибка; ввод из stdin
-- [ ] `make test` зелёный
+- [x] `Secrets.GatewaySocksUser`/`GatewaySocksPassword`, валидация «только парой»
+- [x] `singbox.Outbound.Username`/`Password` (`omitempty`); `render` заполняет их для `gateway`
+- [x] маскирование пароля в выводе `twarp render`
+- [x] `twarp gateway auth`: читает `user` и `password` из stdin (две строки, обрезаются только переводы строк), сохраняет `secrets.yaml` (`0600`); `--clear` удаляет; не под sudo
+- [x] ➕ проба шлюза в `status` берёт креды из `secrets.yaml`
+- [x] тесты: golden с синтетическими кредами; без кредов outbound не меняется; маскирование; только user → ошибка; ввод из stdin
+- [x] `make test` зелёный
 
 ### Task 11: Интеграционный сценарий смены адреса
 

@@ -33,7 +33,7 @@ var commands = []command{
 	{"uninstall", "remove the sing-box launchd daemon"},
 	{"start", "turn the tunnel on (sudo)"},
 	{"stop", "turn the tunnel off, keep it installed (sudo)"},
-	{"gateway", "manage gateway CIDRs"},
+	{"gateway", "manage gateway CIDRs and SOCKS credentials"},
 	{"geo", "update geoip/geosite rule-sets"},
 	{"status", "show daemon and routing status"},
 	{"tui", "interactive status, gateway and connections view"},

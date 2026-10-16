@@ -73,7 +73,10 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 
 	outbounds := []singbox.Outbound{
 		{Type: "direct", Tag: "direct"},
-		{Type: "socks", Tag: "gateway", Server: host, ServerPort: port, Version: "5"},
+		{
+			Type: "socks", Tag: "gateway", Server: host, ServerPort: port, Version: "5",
+			Username: secrets.GatewaySocksUser, Password: secrets.GatewaySocksPassword,
+		},
 		vpn,
 	}
 	for i := range outbounds {

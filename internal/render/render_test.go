@@ -537,3 +537,43 @@ func TestOnChangeWriterSkipsWhenNotInstalled(t *testing.T) {
 		t.Fatalf("rules dir stat err = %v, want it not to be created", err)
 	}
 }
+
+func TestRenderGatewayCredentials(t *testing.T) {
+	out := t.TempDir()
+	createGeoRuleSets(t, out)
+
+	plain := renderFixture(t, out, render.Options{Inbound: render.InboundTUN})
+	var withoutAuth singbox.Config
+	if err := json.Unmarshal(plain, &withoutAuth); err != nil {
+		t.Fatal(err)
+	}
+	if gateway := outboundByTag(t, withoutAuth.Outbounds, "gateway"); gateway.Username != "" || gateway.Password != "" {
+		t.Fatalf("gateway outbound without credentials = %+v", gateway)
+	}
+
+	secrets := testSecrets(t)
+	secrets.GatewaySocksUser, secrets.GatewaySocksPassword = "proxy", "synthetic-gateway-pass"
+	data, err := render.Render(testConfig(), secrets, testPrefixes(), render.Options{Paths: config.Paths{Out: out}, Inbound: render.InboundTUN})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	var rendered singbox.Config
+	if err := json.Unmarshal(data, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	gateway := outboundByTag(t, rendered.Outbounds, "gateway")
+	if gateway.Username != "proxy" || gateway.Password != "synthetic-gateway-pass" {
+		t.Fatalf("gateway outbound = %+v, want the credentials", gateway)
+	}
+
+	if err := render.WriteRuleSet(filepath.Join(out, "rules"), testPrefixes()); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(out, "config.json")
+	if err := render.WriteConfig(configPath, data); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(singBox(t), "check", "--config", configPath).CombinedOutput(); err != nil {
+		t.Fatalf("sing-box check with gateway credentials: %v\n%s", err, output)
+	}
+}

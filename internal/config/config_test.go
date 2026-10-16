@@ -186,3 +186,28 @@ func writeFile(t *testing.T, name string, mode os.FileMode, contents string) str
 	}
 	return path
 }
+
+func TestSecretsGatewayAuthMustBeAPair(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.yaml")
+	if err := os.WriteFile(path, []byte("vpn_uri: vless://synthetic\ngateway_socks_user: proxy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.LoadSecrets(path); err == nil || !strings.Contains(err.Error(), "must be set together") {
+		t.Fatalf("LoadSecrets(user only) error = %v, want pair error", err)
+	}
+
+	want := config.Secrets{VPNURI: "vless://synthetic", GatewaySocksUser: "proxy", GatewaySocksPassword: "synthetic gateway pass"}
+	if err := config.SaveSecrets(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.LoadSecrets(path)
+	if err != nil || got != want || !got.HasGatewayAuth() {
+		t.Fatalf("LoadSecrets() = %+v, %v; want %+v", got, err, want)
+	}
+	if err := config.ValidateGatewayAuth("", ""); err != nil {
+		t.Fatalf("no credentials must be valid, got %v", err)
+	}
+}

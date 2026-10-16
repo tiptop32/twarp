@@ -65,6 +65,30 @@ type VPNConfig struct {
 type Secrets struct {
 	VPNURI      string `yaml:"vpn_uri"`
 	ClashSecret string `yaml:"clash_secret"`
+	// GatewaySocksUser and GatewaySocksPassword are the optional SOCKS5
+	// username/password (RFC 1929) of the gateway; set together or not at all.
+	GatewaySocksUser     string `yaml:"gateway_socks_user,omitempty"`
+	GatewaySocksPassword string `yaml:"gateway_socks_password,omitempty"`
+}
+
+// HasGatewayAuth reports whether gateway SOCKS credentials are configured.
+func (secrets Secrets) HasGatewayAuth() bool {
+	return secrets.GatewaySocksUser != ""
+}
+
+// ValidateGatewayAuth checks the gateway SOCKS credentials: both or neither,
+// each 1 to 255 bytes (the RFC 1929 limit).
+func ValidateGatewayAuth(user, password string) error {
+	if user == "" && password == "" {
+		return nil
+	}
+	if user == "" || password == "" {
+		return errors.New("gateway_socks_user and gateway_socks_password must be set together")
+	}
+	if len(user) > 255 || len(password) > 255 {
+		return errors.New("gateway SOCKS username and password must be at most 255 bytes")
+	}
+	return nil
 }
 
 type rawConfig struct {
@@ -135,6 +159,9 @@ func LoadSecrets(path string) (Secrets, error) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&secrets); err != nil {
 		return Secrets{}, fmt.Errorf("decode secrets %q: %w", path, err)
+	}
+	if err := ValidateGatewayAuth(secrets.GatewaySocksUser, secrets.GatewaySocksPassword); err != nil {
+		return Secrets{}, fmt.Errorf("secrets %q: %w", path, err)
 	}
 	return secrets, nil
 }

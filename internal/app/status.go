@@ -118,7 +118,7 @@ func (s *Service) Status(ctx context.Context, options StatusOptions) Status {
 	}
 
 	s.checkSingBox(ctx, &status, cfg, secrets)
-	s.checkGateway(ctx, &status, cfg, nil, options.Network)
+	s.checkGateway(ctx, &status, cfg, gatewayCredentials(secrets), options.Network)
 	s.checkTunnel(ctx, &status)
 	checkGatewayCIDRs(&status, paths)
 	checkGeo(&status, paths.GeoDir(), s.now())
@@ -146,6 +146,14 @@ func (s *Service) checkSingBox(ctx context.Context, status *Status, cfg config.C
 	default:
 		status.add(LevelFail, "sing-box", fmt.Sprintf("not reachable at %s (is the service installed? sudo twarp install)", cfg.ClashAPI))
 	}
+}
+
+// gatewayCredentials returns the gateway SOCKS credentials, nil without auth.
+func gatewayCredentials(secrets config.Secrets) *socksprobe.Credentials {
+	if !secrets.HasGatewayAuth() {
+		return nil
+	}
+	return &socksprobe.Credentials{User: secrets.GatewaySocksUser, Password: secrets.GatewaySocksPassword}
 }
 
 // checkGateway dials the SOCKS gateway and runs the SOCKS5 handshake, so an

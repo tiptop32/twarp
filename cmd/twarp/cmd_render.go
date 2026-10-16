@@ -67,7 +67,7 @@ func maskRenderedSecrets(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	maskJSONKeys(document, map[string]struct{}{
-		"uuid": {}, "public_key": {}, "short_id": {}, "secret": {},
+		"uuid": {}, "public_key": {}, "short_id": {}, "secret": {}, "password": {},
 	})
 	return marshalDocument(document)
 }
