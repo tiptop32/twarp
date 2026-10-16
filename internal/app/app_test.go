@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -103,6 +105,59 @@ func TestApplyNeedsOwnerFromSudoOrDaemon(t *testing.T) {
 	_, err := service.Apply(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "through twarpd") {
 		t.Fatalf("Apply without owner error = %v, want twarpd hint", err)
+	}
+}
+
+func TestGatewaySocksHostName(t *testing.T) {
+	service, base := newTestService(t, 501)
+	home := filepath.Join(base, "home")
+	configText := "gateway:\n  socks: proxy.local:1080\n  domains: [intra.example]\n  dns: 100.64.0.53\n  allowed_ranges: [100.64.0.0/10]\n"
+	if err := os.WriteFile(filepath.Join(home, "twarp.yaml"), []byte(configText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved := netip.MustParseAddrPort("100.64.0.10:1080")
+	var resolveErr error
+	service.deps.ResolveGateway = func(_ context.Context, hostport string) (netip.AddrPort, error) {
+		if hostport != "proxy.local:1080" {
+			t.Fatalf("resolve %q", hostport)
+		}
+		return resolved, resolveErr
+	}
+	ctx := context.Background()
+
+	if _, err := service.AddGatewayCIDR(ctx, AddGatewayRequest{CIDR: "100.64.0.0/24"}); err == nil || !strings.Contains(err.Error(), "contains gateway SOCKS address 100.64.0.10") {
+		t.Fatalf("add over resolved SOCKS address error = %v", err)
+	}
+	routes, err := service.Routes(ctx)
+	if err != nil || routes.GatewayError != "" || routes.Rules[2].Match != "gateway SOCKS 100.64.0.10/32" {
+		t.Fatalf("routes = %+v, %v", routes, err)
+	}
+
+	resolveErr = errors.New("resolve proxy.local: i/o timeout")
+	result, err := service.AddGatewayCIDR(ctx, AddGatewayRequest{CIDR: "100.64.1.0/24"})
+	if err != nil {
+		t.Fatalf("add while the name does not resolve: %v", err)
+	}
+	if len(result.Warnings) == 0 || !strings.Contains(result.Warnings[0], "not checked against the gateway SOCKS address") {
+		t.Fatalf("warnings = %v", result.Warnings)
+	}
+	routes, err = service.Routes(ctx)
+	if err != nil || !strings.Contains(routes.GatewayError, "i/o timeout") || len(routes.Rules) != 0 || routes.GatewayCIDRs != 1 {
+		t.Fatalf("routes without resolution = %+v, %v", routes, err)
+	}
+	service.deps.Dial = func(context.Context, string, string) (net.Conn, error) {
+		t.Fatal("dial without a resolved address")
+		return nil, nil
+	}
+	status := service.Status(ctx, StatusOptions{})
+	var gateway Check
+	for _, check := range status.Checks {
+		if check.Name == "gateway" {
+			gateway = check
+		}
+	}
+	if gateway.Level != LevelFail || !strings.Contains(gateway.Detail, "i/o timeout") {
+		t.Fatalf("gateway check = %+v, want resolve failure", gateway)
 	}
 }
 

@@ -69,6 +69,10 @@ type Options struct {
 	AuditFile     string
 	AllowedRanges []netip.Prefix
 	GatewaySocks  netip.Addr
+	// GatewaySocksUnknown skips the "prefix contains the SOCKS address" check
+	// when gateway.socks is a host name that does not resolve right now. Route
+	// rule 3 still sends the SOCKS address direct once it resolves.
+	GatewaySocksUnknown bool
 	// OnChange runs after the state is atomically replaced. If it fails, Add or
 	// Remove returns its error, but the new state remains persisted.
 	OnChange   func([]netip.Prefix) error
@@ -98,7 +102,7 @@ func New(opts Options) *Store {
 func (s *Store) Add(ctx context.Context, actor, input, comment string, force bool) (AddResult, error) {
 	prefix, warnings, err := Normalize(input)
 	if err == nil {
-		err = validatePrefix(prefix, s.opts.AllowedRanges, s.opts.GatewaySocks, force)
+		err = validatePrefix(prefix, s.opts.AllowedRanges, s.opts.GatewaySocks, s.opts.GatewaySocksUnknown, force)
 	}
 	if err != nil {
 		// Refused attempts are the most useful trace of what an agent tried to do.

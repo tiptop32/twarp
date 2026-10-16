@@ -53,7 +53,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 			if err != nil {
 				return nil, err
 			}
-			return render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN})
+			return deps.app(app.ActorCLI).RenderConfig(context.Background(), paths, cfg, secrets, prefixes)
 		},
 		WriteRuleSet: func(directory string, uid, gid int) error {
 			return render.WriteRuleSetOwned(directory, prefixes, uid, gid)

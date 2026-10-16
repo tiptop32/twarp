@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 	"os"
 
@@ -39,6 +38,9 @@ type Gateway struct {
 	actor         string
 	allowedRanges []netip.Prefix
 	rulesDir      string
+	// addStore builds the store that validates an addition. A host name in
+	// gateway.socks is resolved only then, so listing never waits on DNS.
+	addStore func(ctx context.Context) (*state.Store, []string)
 }
 
 // NewGateway wraps an existing store. Service.Gateway builds one from config.
@@ -60,15 +62,6 @@ func (s *Service) Gateway() (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	host, _, err := net.SplitHostPort(cfg.Gateway.Socks)
-	if err != nil {
-		return nil, fmt.Errorf("parse gateway.socks: %w", err)
-	}
-	gatewaySocks, err := netip.ParseAddr(host)
-	if err != nil {
-		return nil, fmt.Errorf("gateway.socks host must be an IP address: %w", err)
-	}
-
 	var running func() bool
 	secrets, err := config.LoadSecrets(paths.SecretsFile())
 	if err == nil {
@@ -78,16 +71,25 @@ func (s *Service) Gateway() (*Gateway, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	store := state.New(state.Options{
+	options := state.Options{
 		File:          paths.GatewayIPsFile(),
 		LockFile:      paths.LockFile(),
 		AuditFile:     paths.AuditFile(),
 		AllowedRanges: cfg.Gateway.AllowedRanges,
-		GatewaySocks:  gatewaySocks,
 		OnChange:      render.OnChangeWriter(paths.RulesDir()),
 		Running:       running,
-	})
-	return NewGateway(store, s.actor, cfg.Gateway.AllowedRanges, paths.RulesDir()), nil
+	}
+	gateway := NewGateway(state.New(options), s.actor, cfg.Gateway.AllowedRanges, paths.RulesDir())
+	gateway.addStore = func(ctx context.Context) (*state.Store, []string) {
+		socks, err := s.ResolveGateway(ctx, cfg.Gateway.Socks)
+		if err != nil {
+			options.GatewaySocksUnknown = true
+			return state.New(options), []string{fmt.Sprintf("%v; the CIDR was not checked against the gateway SOCKS address", err)}
+		}
+		options.GatewaySocks = socks.Addr()
+		return state.New(options), nil
+	}
+	return gateway, nil
 }
 
 // ListGatewayCIDRs loads the current config and lists the gateway CIDRs. Like
@@ -133,7 +135,15 @@ func (g *Gateway) ListGatewayCIDRs(context.Context) ([]GatewayEntry, error) {
 // AddGatewayCIDR validates and adds a CIDR. Before install the change is
 // only saved; check Installed to tell the user.
 func (g *Gateway) AddGatewayCIDR(ctx context.Context, request AddGatewayRequest) (AddResult, error) {
-	return g.store.Add(ctx, g.actor, request.CIDR, request.Comment, request.Force)
+	store, warnings := g.store, []string(nil)
+	if g.addStore != nil {
+		store, warnings = g.addStore(ctx)
+	}
+	result, err := store.Add(ctx, g.actor, request.CIDR, request.Comment, request.Force)
+	if err == nil {
+		result.Warnings = append(warnings, result.Warnings...)
+	}
+	return result, err
 }
 
 // RemoveGatewayCIDR removes the exact normalized CIDR if present.

@@ -39,18 +39,18 @@ func Normalize(input string) (netip.Prefix, []string, error) {
 
 // validatePrefix applies the hard network-safety rules and the configurable
 // allowed-range policy. Force bypasses only the allowed-range policy.
-func validatePrefix(prefix netip.Prefix, allowedRanges []netip.Prefix, gatewaySocks netip.Addr, force bool) error {
+func validatePrefix(prefix netip.Prefix, allowedRanges []netip.Prefix, gatewaySocks netip.Addr, socksUnknown, force bool) error {
 	if err := validatePrefixStructure(prefix); err != nil {
 		return err
 	}
 
 	prefix = prefix.Masked()
-	if !gatewaySocks.IsValid() {
+	switch {
+	case socksUnknown:
+	case !gatewaySocks.IsValid():
 		return fmt.Errorf("gateway SOCKS address is not configured")
-	}
-	gatewaySocks = gatewaySocks.Unmap()
-	if prefix.Contains(gatewaySocks) {
-		return fmt.Errorf("prefix %s contains gateway SOCKS address %s", prefix, gatewaySocks)
+	case prefix.Contains(gatewaySocks.Unmap()):
+		return fmt.Errorf("prefix %s contains gateway SOCKS address %s", prefix, gatewaySocks.Unmap())
 	}
 
 	if force {

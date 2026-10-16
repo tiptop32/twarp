@@ -169,14 +169,14 @@ func validateConfig(raw rawConfig) (Config, error) {
 	if !validHostPort(raw.Gateway.Socks) {
 		return Config{}, errors.New("gateway.socks must be host:port with a port from 1 to 65535")
 	}
-	gatewaySocksHost, _, _ := net.SplitHostPort(raw.Gateway.Socks)
-	if _, err := netip.ParseAddr(gatewaySocksHost); err != nil {
-		return Config{}, errors.New("gateway.socks host must be an IP address")
-	}
 	if len(raw.Gateway.Domains) == 0 {
 		return Config{}, errors.New("gateway.domains is required and must not be empty")
 	}
 	gatewayDomains, err := normalizeDomains("gateway.domains", raw.Gateway.Domains)
+	if err != nil {
+		return Config{}, err
+	}
+	gatewaySocks, err := validateGatewaySocks(raw.Gateway.Socks, gatewayDomains)
 	if err != nil {
 		return Config{}, err
 	}
@@ -209,7 +209,7 @@ func validateConfig(raw rawConfig) (Config, error) {
 
 	return Config{
 		Gateway: GatewayConfig{
-			Socks:         raw.Gateway.Socks,
+			Socks:         gatewaySocks,
 			Domains:       gatewayDomains,
 			DNS:           raw.Gateway.DNS,
 			AllowedRanges: allowedRanges,
@@ -219,6 +219,46 @@ func validateConfig(raw rawConfig) (Config, error) {
 		ClashAPI: raw.ClashAPI,
 		LogLevel: raw.LogLevel,
 	}, nil
+}
+
+// validateGatewaySocks accepts an IP literal or a host name. A host name must
+// not fall under gateway.domains: those names resolve through the gateway DNS
+// over this very SOCKS server, so after a network change the name could never
+// resolve again. Host names are returned in lower case.
+func validateGatewaySocks(value string, gatewayDomains []string) (string, error) {
+	host, port, _ := net.SplitHostPort(value)
+	if _, err := netip.ParseAddr(host); err == nil {
+		return value, nil
+	}
+	host = strings.ToLower(host)
+	if !validHostName(host) {
+		return "", errors.New("gateway.socks host must be an IP address or a host name such as proxy.local")
+	}
+	for _, domain := range gatewayDomains {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return "", fmt.Errorf("gateway.socks host %s is under gateway.domains %s: it would resolve through the gateway itself; use its .local name or an IP address", host, domain)
+		}
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
+// validHostName checks RFC 1123 host name syntax: dot-separated labels of
+// letters, digits and inner hyphens, each 1 to 63 characters.
+func validHostName(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, char := range label {
+			if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validHostPort(value string) bool {

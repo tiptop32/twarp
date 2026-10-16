@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/gwaddr"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
@@ -54,6 +56,10 @@ type Deps struct {
 	// GeoOptions overrides download settings; Dir and AuditFile are always set
 	// by GeoUpdate.
 	GeoOptions geo.Options
+	// ResolveGateway turns gateway.socks into an address. Nil uses
+	// gwaddr.Resolve with LookupIP; twarpd sets it to reuse the address it has
+	// just resolved instead of waiting for the network again under its lock.
+	ResolveGateway func(ctx context.Context, hostport string) (netip.AddrPort, error)
 }
 
 // Service implements twarp operations for one front end, identified by actor
@@ -77,6 +83,14 @@ func (s *Service) now() time.Time {
 
 func (s *Service) isRoot() bool {
 	return s.deps.Sys != nil && s.deps.Sys.Geteuid() == 0
+}
+
+// ResolveGateway returns the address gateway.socks points at now.
+func (s *Service) ResolveGateway(ctx context.Context, hostport string) (netip.AddrPort, error) {
+	if s.deps.ResolveGateway != nil {
+		return s.deps.ResolveGateway(ctx, hostport)
+	}
+	return gwaddr.Resolve(ctx, s.deps.LookupIP, hostport)
 }
 
 // LogDir returns the directory of the daemon logs and the root audit log.

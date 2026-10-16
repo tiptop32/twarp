@@ -162,12 +162,14 @@ type LiveStatus struct {
 - Modify: `internal/render/render.go`, `internal/render/render_test.go` (+ golden)
 - Modify: `internal/app/lifecycle.go` (`renderInputs`)
 
-- [ ] валидация: хост `gateway.socks` — IP или DNS-имя (RFC 1123 метки, без схемы и пути); IP по-прежнему проверяется против loopback/multicast
-- [ ] `gwaddr.Resolve(ctx, lookup, hostport) (netip.AddrPort, error)`: IP-литерал без сети; имя → первый IPv4, иначе первый не-link-local IPv6; отказ на loopback/unspecified/link-local результат; таймаут 5 с
-- [ ] `render.Options.GatewaySocks netip.AddrPort`; outbound `gateway` и правило `ip_cidr → direct` строятся из него; порядок маршрутов не меняется
-- [ ] `renderInputs` резолвит через `Deps.LookupIP`
-- [ ] тесты: таблица валидации (IP, IPv6 в скобках, `.local`, мусор, схема), резолв (ответ mDNS `[fe80::…, 192.0.2.10]` → `192.0.2.10`; только link-local → ошибка; только глобальный v6; пусто; таймаут; loopback), golden рендера с адресом из резолвера, тест порядка маршрутов
-- [ ] `make test` зелёный
+- [x] валидация: хост `gateway.socks` — IP или DNS-имя (RFC 1123 метки, без схемы и пути); IP-литерал принимается как раньше, без проверки на loopback: интеграционные тесты ходят на SOCKS-заглушку на `127.0.0.1`
+- [x] `gwaddr.Resolve(ctx, lookup, hostport) (netip.AddrPort, error)`: IP-литерал без сети; имя → первый IPv4, иначе первый не-link-local IPv6; отказ на loopback/unspecified/link-local результат; таймаут 5 с
+- [x] `render.Options.GatewaySocks netip.AddrPort`; outbound `gateway` и правило `ip_cidr → direct` строятся из него; порядок маршрутов не меняется
+- [x] `renderInputs` резолвит через `Deps.LookupIP`
+- [x] тесты: таблица валидации (IP, IPv6 в скобках, `.local`, мусор, схема), резолв (ответ mDNS `[fe80::…, 192.0.2.10]` → `192.0.2.10`; только link-local → ошибка; только глобальный v6; пусто; таймаут; loopback), golden рендера с адресом из резолвера, тест порядка маршрутов
+- [x] ➕ (ревью 2) `app.Gateway` резолвит имя только при добавлении CIDR; без резолва проверка «префикс содержит SOCKS» пропускается с предупреждением (`state.Options.GatewaySocksUnknown`); `status`, `Routes` и `install` используют тот же резолв (`Service.ResolveGateway`, `Service.RenderConfig`)
+- [x] ➕ (ревью 3) имя под `gateway.domains` отклоняется валидацией
+- [x] `make test` зелёный
 
 ### Task 3: IPC: протокол, сервер с проверкой peer uid, клиент
 

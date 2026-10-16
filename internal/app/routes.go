@@ -44,11 +44,14 @@ type Routes struct {
 	// VPNProtocol is empty when no VPN URI is imported or it does not parse.
 	VPNProtocol string
 	// Rules are the route rules in sing-box order; unmatched traffic goes to vpn.
+	// They are empty when GatewayError is set.
 	Rules []RouteRule
+	// GatewayError says why a gateway.socks host name did not resolve.
+	GatewayError string
 }
 
 // Routes loads config and gateway state and describes the routing.
-func (s *Service) Routes(context.Context) (Routes, error) {
+func (s *Service) Routes(ctx context.Context) (Routes, error) {
 	paths, err := config.Resolve(s.deps.Sys)
 	if err != nil {
 		return Routes{}, err
@@ -58,10 +61,6 @@ func (s *Service) Routes(context.Context) (Routes, error) {
 		return Routes{}, err
 	}
 	prefixes, err := state.ReadPrefixes(paths.GatewayIPsFile(), paths.LockFile())
-	if err != nil {
-		return Routes{}, err
-	}
-	rules, err := render.RouteRules(cfg)
 	if err != nil {
 		return Routes{}, err
 	}
@@ -85,6 +84,15 @@ func (s *Service) Routes(context.Context) (Routes, error) {
 		if outbound, err := uri.Parse(secrets.VPNURI); err == nil {
 			routes.VPNProtocol = vpnProtocol(outbound)
 		}
+	}
+	socks, err := s.ResolveGateway(ctx, cfg.Gateway.Socks)
+	if err != nil {
+		routes.GatewayError = err.Error()
+		return routes, nil
+	}
+	rules, err := render.RouteRules(cfg, socks)
+	if err != nil {
+		return Routes{}, err
 	}
 	for _, rule := range rules {
 		routes.Rules = append(routes.Rules, describeRule(rule, len(prefixes)))

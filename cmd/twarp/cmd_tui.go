@@ -789,6 +789,9 @@ func (m tuiModel) viewRouteRules() string {
 	if m.routesErr != nil {
 		return styleFail.Render(m.routesErr.Error())
 	}
+	if m.routes.GatewayError != "" {
+		return styleFail.Render("gateway.socks: " + m.routes.GatewayError)
+	}
 	rows := make([][]string, 0, len(m.routes.Rules))
 	for index, rule := range m.routes.Rules {
 		target := rule.Outbound

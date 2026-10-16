@@ -160,7 +160,7 @@ func TestRenderValidatesGatewaySOCKS(t *testing.T) {
 		address string
 		want    string
 	}{
-		{name: "hostname", address: "gw.example:1080", want: "must be an IP address"},
+		{name: "unresolved hostname", address: "proxy.local:1080", want: "resolve it before rendering"},
 		{name: "zero port", address: "192.0.2.10:0", want: "invalid port"},
 		{name: "non-numeric port", address: "192.0.2.10:not-a-port", want: "invalid port"},
 	}
@@ -175,6 +175,37 @@ func TestRenderValidatesGatewaySOCKS(t *testing.T) {
 				t.Fatalf("Render() error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+// A host name in gateway.socks renders exactly like the IP literal it
+// resolved to: the outbound dials the address and rule 3 keeps it direct.
+func TestRenderUsesResolvedGatewaySOCKS(t *testing.T) {
+	out := t.TempDir()
+	createGeoPlaceholders(t, out)
+	cfg := testConfig()
+	cfg.Gateway.Socks = "proxy.local:1080"
+
+	got, err := render.Render(cfg, testSecrets(t), testPrefixes(), render.Options{
+		Paths: config.Paths{Out: out}, Inbound: "tun",
+		GatewaySocks: netip.MustParseAddrPort("192.0.2.10:1080"),
+	})
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	got = bytes.ReplaceAll(got, []byte(out), []byte("${OUT}"))
+	assertGolden(t, filepath.Join("testdata", "golden", "config.json"), got)
+
+	rules, err := render.RouteRules(cfg, netip.MustParseAddrPort("192.0.2.20:1080"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) < 6 || !reflect.DeepEqual(rules[2], singbox.RouteRule{IPCIDR: []string{"192.0.2.20/32"}, Outbound: "direct"}) ||
+		rules[3].Outbound != "gateway" || rules[4].Outbound != "gateway" || !rules[5].IPIsPrivate {
+		t.Fatalf("route rules = %#v, want SOCKS host direct third and gateway rules before ip_is_private", rules)
+	}
+	if _, err := render.RouteRules(cfg, netip.AddrPort{}); err == nil {
+		t.Fatal("RouteRules() with an unresolved host name succeeded")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/gwaddr"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/state"
@@ -152,16 +153,27 @@ func (s *Service) checkGateway(ctx context.Context, status *Status, address stri
 		status.add(LevelFail, "gateway", "TCP dialer is unavailable")
 		return
 	}
+	// Resolve a host name the way render does: the dialer's own lookup may
+	// try the link-local mDNS answer first and fail.
+	target, label := address, address
+	if !gwaddr.IsLiteral(address) {
+		socks, err := s.ResolveGateway(ctx, address)
+		if err != nil {
+			status.add(LevelFail, "gateway", err.Error())
+			return
+		}
+		target, label = socks.String(), fmt.Sprintf("%s (%s)", address, socks)
+	}
 	ctx, cancel := context.WithTimeout(ctx, statusProbeTimeout)
 	defer cancel()
-	connection, err := s.deps.Dial(ctx, "tcp", address)
+	connection, err := s.deps.Dial(ctx, "tcp", target)
 	if err != nil {
-		status.add(LevelFail, "gateway", fmt.Sprintf("%s is not reachable: %v", address, err))
+		status.add(LevelFail, "gateway", fmt.Sprintf("%s is not reachable: %v", label, err))
 		return
 	}
 	_ = connection.Close()
 	status.GatewayReachable = true
-	status.add(LevelOK, "gateway", address+" is reachable")
+	status.add(LevelOK, "gateway", label+" is reachable")
 }
 
 func (s *Service) checkTunnel(ctx context.Context, status *Status) {

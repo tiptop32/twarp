@@ -125,14 +125,14 @@ func (s *Service) GeoUpdate(ctx context.Context) (geo.Report, error) {
 	return geo.Update(ctx, options)
 }
 
-// RenderInputs loads config, secrets and gateway state and renders the
-// production sing-box config.
-func (s *Service) RenderInputs() (config.Paths, []netip.Prefix, []byte, error) {
-	paths, _, prefixes, data, err := s.renderInputs()
+// RenderInputs loads config, secrets and gateway state, resolves
+// gateway.socks and renders the production sing-box config.
+func (s *Service) RenderInputs(ctx context.Context) (config.Paths, []netip.Prefix, []byte, error) {
+	paths, _, prefixes, data, err := s.renderInputs(ctx)
 	return paths, prefixes, data, err
 }
 
-func (s *Service) renderInputs() (config.Paths, config.Config, []netip.Prefix, []byte, error) {
+func (s *Service) renderInputs(ctx context.Context) (config.Paths, config.Config, []netip.Prefix, []byte, error) {
 	paths, err := config.Resolve(s.deps.Sys)
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
@@ -149,11 +149,21 @@ func (s *Service) renderInputs() (config.Paths, config.Config, []netip.Prefix, [
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
 	}
-	data, err := render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN})
+	data, err := s.RenderConfig(ctx, paths, cfg, secrets, prefixes)
 	if err != nil {
 		return config.Paths{}, config.Config{}, nil, nil, err
 	}
 	return paths, cfg, prefixes, data, nil
+}
+
+// RenderConfig resolves gateway.socks and renders the production config.
+// Install uses it too, so every rendered config dials the same address.
+func (s *Service) RenderConfig(ctx context.Context, paths config.Paths, cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix) ([]byte, error) {
+	socks, err := s.ResolveGateway(ctx, cfg.Gateway.Socks)
+	if err != nil {
+		return nil, err
+	}
+	return render.Render(cfg, secrets, prefixes, render.Options{Paths: paths, Inbound: render.InboundTUN, GatewaySocks: socks})
 }
 
 // Apply re-renders the config, checks it with sing-box and reloads or starts
@@ -188,7 +198,7 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		release()
 		return "", s.failApply(fmt.Errorf("read installed gateway rule-set: %w", readErr))
 	}
-	paths, cfg, prefixes, data, err := s.renderInputs()
+	paths, cfg, prefixes, data, err := s.renderInputs(ctx)
 	if err != nil {
 		release()
 		return "", s.failApply(err)

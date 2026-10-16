@@ -88,6 +88,27 @@ log_level: debug
 	}
 }
 
+func TestLoadAcceptsGatewaySocksHostName(t *testing.T) {
+	t.Parallel()
+
+	for input, want := range map[string]string{
+		"proxyhost.local:8080":    "proxyhost.local:8080",
+		"ProxyHost.Local:8080":    "proxyhost.local:8080",
+		"proxy-1.example:1080":    "proxy-1.example:1080",
+		"proxyhost:8080":          "proxyhost:8080",
+		"\"[2001:db8::10]:1080\"": "[2001:db8::10]:1080",
+	} {
+		path := writeFile(t, "twarp.yaml", 0o600, strings.Replace(validConfig(), "192.168.1.10:1080", input, 1))
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatalf("Load(%s) error = %v", input, err)
+		}
+		if cfg.Gateway.Socks != want {
+			t.Fatalf("Load(%s) socks = %q, want %q", input, cfg.Gateway.Socks, want)
+		}
+	}
+}
+
 func TestLoadRejectsInvalidConfig(t *testing.T) {
 	t.Parallel()
 
@@ -101,7 +122,11 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 		{name: "missing socks", yaml: strings.Replace(validConfig(), "  socks: 192.168.1.10:1080\n", "", 1), wantError: "gateway.socks is required"},
 		{name: "socks without port", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1.10", 1), wantError: "gateway.socks must be host:port"},
 		{name: "socks invalid port", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "192.168.1.10:70000", 1), wantError: "gateway.socks must be host:port"},
-		{name: "socks hostname", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "proxy.example.com:1080", 1), wantError: "gateway.socks host must be an IP address"},
+		{name: "socks scheme", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "\"socks5://proxy.local:1080\"", 1), wantError: "gateway.socks must be host:port"},
+		{name: "socks path", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "proxy.local/x:1080", 1), wantError: "gateway.socks host must be an IP address or a host name"},
+		{name: "socks bad label", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "-proxy.local:1080", 1), wantError: "gateway.socks host must be an IP address or a host name"},
+		{name: "socks under gateway domain", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "proxy.intra.example:1080", 1), wantError: "is under gateway.domains intra.example"},
+		{name: "socks is gateway domain", yaml: strings.Replace(validConfig(), "192.168.1.10:1080", "INTRA.example:1080", 1), wantError: "is under gateway.domains"},
 		{name: "missing DNS", yaml: strings.Replace(validConfig(), "  dns: 100.64.0.53\n", "", 1), wantError: "gateway.dns is required"},
 		{name: "non-IP DNS", yaml: strings.Replace(validConfig(), "100.64.0.53", "dns.example", 1), wantError: "gateway.dns must be an IP address"},
 		{name: "invalid domain", yaml: strings.Replace(validConfig(), "intra.example", "-bad.example", 1), wantError: "gateway.domains"},
