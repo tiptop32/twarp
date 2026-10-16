@@ -132,6 +132,9 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runTUI(args[1:], stdout, stderr, deps)
 	case "mcp":
 		return runMCP(args[1:], stdout, stderr, deps)
+	case "daemon":
+		// hidden: launchd runs it as dev.twarp.daemon
+		return runDaemon(args[1:], stdout, stderr, deps)
 	}
 	_, _ = fmt.Fprintf(stderr, "twarp: unknown command %q\n\n", args[0])
 	usage(stderr)
