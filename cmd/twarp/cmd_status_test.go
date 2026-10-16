@@ -131,7 +131,7 @@ func TestRunStatusReportsStaleOwnTunnel(t *testing.T) {
 			}}
 			fixture.deps.Runner = fixture.runner
 			stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
-			if code != 1 || !strings.Contains(stdout, "FAIL tunnel: stale route: utun9 172.19.0.1 holds the default route, but the sing-box service is not running; run: sudo twarp start") {
+			if code != 1 || !strings.Contains(stdout, "FAIL tunnel: stale route: utun9 172.19.0.1 holds the default route, but the sing-box service is not running; run: twarp up") {
 				t.Fatalf("status = (%d, %q), want stale own utun failure", code, stdout)
 			}
 			if err := fixture.runner.Verify(); err != nil {
@@ -155,7 +155,7 @@ func TestRunStatusFailsOnUnexpectedPrintError(t *testing.T) {
 	if code != 1 || !strings.Contains(stdout, "FAIL tunnel: inspect sing-box service") {
 		t.Fatalf("status = (%d, %q), want tunnel inspection failure", code, stdout)
 	}
-	for _, unwanted := range []string{"stale route", "sudo twarp start"} {
+	for _, unwanted := range []string{"stale route", "twarp up"} {
 		if strings.Contains(stdout, unwanted) {
 			t.Errorf("stdout = %q, want no %q", stdout, unwanted)
 		}
@@ -184,7 +184,7 @@ func TestRunStatusWarnsAboutStaleGeo(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
-	if code != 0 || !strings.Contains(stdout, "WARN geo: geoip-ru.srs is 9 days old: sudo twarp geo update") {
+	if code != 0 || !strings.Contains(stdout, "WARN geo: geoip-ru.srs is 9 days old: twarp geo update") {
 		t.Fatalf("status = (%d, %q), want stale geo warning", code, stdout)
 	}
 }
@@ -195,7 +195,7 @@ func TestRunStatusFailsWhenGeoFileIsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
-	if code != 1 || !strings.Contains(stdout, "FAIL geo: geoip-ru.srs is missing: sudo twarp geo update") {
+	if code != 1 || !strings.Contains(stdout, "FAIL geo: geoip-ru.srs is missing: twarp geo update") {
 		t.Fatalf("status = (%d, %q), want missing geo failure", code, stdout)
 	}
 }

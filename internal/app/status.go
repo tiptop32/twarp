@@ -225,7 +225,7 @@ func (s *Service) checkTunnel(ctx context.Context, status *Status) {
 			return
 		}
 		if state != sysexec.ServiceRunning {
-			status.add(LevelFail, "tunnel", fmt.Sprintf("stale route: %s %s holds the default route, but the sing-box service is not running; run: sudo twarp start", conflict.Interface, conflict.Addr))
+			status.add(LevelFail, "tunnel", fmt.Sprintf("stale route: %s %s holds the default route, but the sing-box service is not running; run: twarp up", conflict.Interface, conflict.Addr))
 			return
 		}
 		status.TunnelActive = true
@@ -270,7 +270,7 @@ func checkGeo(status *Status, directory string, now time.Time) {
 		info, err := os.Stat(filepath.Join(directory, source.Name))
 		if err != nil {
 			missing = true
-			status.add(LevelFail, "geo", fmt.Sprintf("%s is missing: sudo twarp geo update", source.Name))
+			status.add(LevelFail, "geo", fmt.Sprintf("%s is missing: twarp geo update", source.Name))
 			continue
 		}
 		if oldest.IsZero() || info.ModTime().Before(oldest) {
@@ -280,7 +280,7 @@ func checkGeo(status *Status, directory string, now time.Time) {
 		days := int(age / (24 * time.Hour))
 		detail := fmt.Sprintf("%s is %d days old", source.Name, days)
 		if age > geoWarningAge {
-			status.add(LevelWarn, "geo", detail+": sudo twarp geo update")
+			status.add(LevelWarn, "geo", detail+": twarp geo update")
 		} else {
 			status.add(LevelOK, "geo", detail)
 		}

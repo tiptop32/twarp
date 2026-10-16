@@ -65,7 +65,7 @@ func TestCheckTunnelRejectsStaleOwnTunnel(t *testing.T) {
 			if !ok || check.Level != LevelFail {
 				t.Fatalf("tunnel check = (%s, %q), want FAIL", check.Level, check.Detail)
 			}
-			for _, want := range []string{"stale route: utun9 172.19.0.1", "is not running", "sudo twarp start"} {
+			for _, want := range []string{"stale route: utun9 172.19.0.1", "is not running", "run: twarp up"} {
 				if !strings.Contains(check.Detail, want) {
 					t.Errorf("detail = %q, want %q", check.Detail, want)
 				}
@@ -94,7 +94,7 @@ func TestCheckTunnelFailsOnUnexpectedPrintError(t *testing.T) {
 	if !strings.Contains(check.Detail, "inspect sing-box service") {
 		t.Errorf("detail = %q, want the inspection failure", check.Detail)
 	}
-	for _, unwanted := range []string{"stale route", "sudo twarp start"} {
+	for _, unwanted := range []string{"stale route", "twarp up"} {
 		if strings.Contains(check.Detail, unwanted) {
 			t.Errorf("detail = %q, want no %q", check.Detail, unwanted)
 		}

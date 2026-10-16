@@ -234,11 +234,13 @@ type LiveStatus struct {
 - Modify: `cmd/twarp/main.go`, `cmd/twarp/cmd_install.go` (start/stop/apply), `cmd/twarp/cmd_geo.go`
 - Modify: `cmd/twarp/main_test.go`
 
-- [ ] `twarp up`, `twarp down`; не установлено → «один раз: sudo twarp install», код 1; демон недоступен → подсказка `sudo launchctl kickstart system/dev.twarp.daemon`
-- [ ] `start`/`stop`/`apply`/`geo update` без root идут через `ipc.Call`; под sudo прежний путь
-- [ ] `twarp` без аргументов: TUI, если stdout — TTY, иначе usage; `help` печатает usage; список команд в usage: `up`, `down` первыми
-- [ ] тесты: up/down через фейковый клиент; без root и без демона; под root прямой путь не трогает сокет; без аргументов с TTY и без
-- [ ] `make test` зелёный
+- [x] `twarp up`, `twarp down`; не установлено → «один раз: sudo twarp install», код 1; демон недоступен → подсказка `sudo launchctl kickstart system/dev.twarp.daemon`
+- [x] `start`/`stop`/`apply`/`geo update` без root идут через `ipc.Call`; под sudo прежний путь
+- [x] `twarp` без аргументов: TUI, если stdout — TTY, иначе usage; `help` печатает usage; список команд в usage: `up`, `down` первыми
+- [x] тесты: up/down через фейковый клиент; без root и без демона; под root прямой путь не трогает сокет; без аргументов с TTY и без
+- [x] ➕ в протоколе нет отдельного `start`: `twarp start` без root идёт как `up` (apply + start), `stop` — как `down`
+- [x] ➕ подсказки в выводе (`stopped; start again`, стоящий tunnel, geo) указывают `twarp up` / `twarp geo update` без sudo
+- [x] `make test` зелёный
 
 ### Task 8: Честный status и TUI без sudo
 

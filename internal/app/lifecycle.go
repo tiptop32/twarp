@@ -111,7 +111,7 @@ func (s *Service) Stop(ctx context.Context) (string, error) {
 	if err := s.RemoveResolvers(ctx); err != nil {
 		return "", fmt.Errorf("stopped, but %w", err)
 	}
-	return "stopped; start again: sudo twarp start", nil
+	return "stopped; start again: twarp up", nil
 }
 
 // GeoUpdate downloads the geo rule-sets into the root-owned geo directory.
@@ -256,7 +256,7 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		if err := s.appendRootAudit("apply", "stopped"); err != nil {
 			return "", err
 		}
-		return "applied; sing-box stays stopped; start it: sudo twarp start", nil
+		return "applied; sing-box stays stopped; start it: twarp up", nil
 	}
 	failAfterPromotion := func(cause error, reload bool) (string, error) {
 		cause = errors.Join(cause, restoreApplyConfig(paths.OutConfig(), previousConfig, configReadErr == nil))

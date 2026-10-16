@@ -22,10 +22,16 @@ import (
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
 
-func TestRunApplyRequiresRoot(t *testing.T) {
-	stdout, stderr, code := runCLIForTest([]string{"apply"}, cliDeps{Sys: cliTestSys{euid: 501}})
-	if code != 1 || stdout != "" || !strings.Contains(stderr, "run with sudo") {
-		t.Fatalf("apply = (%d, %q, %q), want sudo error", code, stdout, stderr)
+func TestRunApplyWithoutRootGoesThroughDaemon(t *testing.T) {
+	stdout, stderr, code := runCLIForTest([]string{"apply"}, cliDeps{Sys: cliTestSys{euid: 501}, IPC: unavailableDaemon})
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "not installed; run once: sudo twarp install") {
+		t.Fatalf("apply without install = (%d, %q, %q), want install hint", code, stdout, stderr)
+	}
+
+	daemon := &fakeDaemon{summary: "applied"}
+	stdout, stderr, code = runCLIForTest([]string{"apply"}, cliDeps{Sys: cliTestSys{euid: 501}, IPC: daemon.call})
+	if code != 0 || stdout != "applied\n" || stderr != "" || daemon.ops() != "apply" {
+		t.Fatalf("apply via daemon = (%d, %q, %q), ops %q", code, stdout, stderr, daemon.ops())
 	}
 }
 

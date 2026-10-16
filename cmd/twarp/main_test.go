@@ -42,8 +42,8 @@ func TestRunUsage(t *testing.T) {
 
 func TestRunWithDepsDispatchesGeoUsingInjectedSystem(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runWithDeps([]string{"geo", "update"}, &stdout, &stderr, cliDeps{Sys: cliTestSys{euid: 501}})
-	if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "run with sudo") {
+	code := runWithDeps([]string{"geo", "update"}, &stdout, &stderr, cliDeps{Sys: cliTestSys{euid: 501}, IPC: unavailableDaemon})
+	if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "not installed") {
 		t.Fatalf("geo update = (%d, %q, %q), want injected non-root refusal", code, stdout.String(), stderr.String())
 	}
 }

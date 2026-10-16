@@ -11,11 +11,14 @@ import (
 	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/ipc"
 )
 
 type geoDeps struct {
 	Sys     config.Sys
 	Options geo.Options
+	// CLI routes a non-root update through twarpd.
+	CLI cliDeps
 }
 
 func runGeo(args []string, stdout, stderr io.Writer, deps geoDeps) int {
@@ -39,6 +42,9 @@ func runGeo(args []string, stdout, stderr io.Writer, deps geoDeps) int {
 	if fs.NArg() != 0 {
 		_, _ = fmt.Fprintf(stderr, "twarp geo update: unexpected arguments: %v\n", fs.Args())
 		return 2
+	}
+	if deps.Sys.Geteuid() != 0 && deps.CLI.Sys != nil {
+		return runViaDaemon("geo update", ipc.OpGeoUpdate, stdout, stderr, deps.CLI)
 	}
 	service := app.New(app.Deps{Sys: deps.Sys, GeoOptions: deps.Options}, app.ActorCLI)
 	report, err := service.GeoUpdate(context.Background())
