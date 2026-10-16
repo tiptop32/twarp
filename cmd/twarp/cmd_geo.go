@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/config"
@@ -42,8 +41,8 @@ func runGeo(args []string, stdout, stderr io.Writer, deps geoDeps) int {
 	}
 	service := app.New(app.Deps{Sys: deps.Sys, GeoOptions: deps.Options}, app.ActorCLI)
 	report, err := service.GeoUpdate(context.Background())
-	for _, file := range report.Files {
-		_, _ = fmt.Fprintf(stdout, "updated %s: %d bytes, mtime %s\n", file.Name, file.Size, file.ModTime.UTC().Format(time.RFC3339Nano))
+	if text := app.GeoReportText(report); text != "" {
+		_, _ = fmt.Fprintln(stdout, text)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp geo update: %v\n", err)

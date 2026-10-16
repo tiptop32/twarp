@@ -204,12 +204,16 @@ type LiveStatus struct {
 - Modify: `internal/fsutil/fsutil.go` (проверка root-owned пути, вынесенная из `cmd_tui.go`)
 - Modify: `cmd/twarp/main.go`
 
-- [ ] `daemon.Run(ctx, deps)`: поднимает `ipc`-сервер с uid владельца и 0, обработчик маппит операции на `app.Service` (`up` = `Apply` + `Start`, `down` = `Stop`, `apply`, `geo_update`, `status`), все операции под одним mutex
-- [ ] цикл netwatch: резолв хоста `gateway.socks` → сравнение с живым адресом → `Apply` с актором `daemon-net`; ошибка резолва сохраняется в `LastResolveError`, конфиг не трогается; IP-литерал пропускается
-- [ ] живой адрес читается из работающего `config.json` (outbound `gateway`) при старте и после каждого `Apply`
-- [ ] `twarp daemon` (скрытая): требует root, `TWARP_OWNER_*`, root-owned бинарь; пишет в `twarpd.log`
-- [ ] тесты с фейковыми Service/резолвером/источником: смена адреса → ровно один Apply; тот же адрес → ни одного; ошибка резолва → нет Apply и есть `LastResolveError`; IP-литерал → нет резолва; параллельные `up` и сетевое событие сериализуются; `status` отдаёт живой адрес и `Stale`
-- [ ] `make test` зелёный
+- [x] `daemon.Run(ctx, deps)`: поднимает `ipc`-сервер с uid владельца и 0, обработчик маппит операции на `app.Service` (`up` = `Apply` + `Start`, `down` = `Stop`, `apply`, `geo_update`, `status`), все операции под одним mutex
+- [x] цикл netwatch: резолв хоста `gateway.socks` → сравнение с живым адресом → `Apply` с актором `daemon-net`; ошибка резолва сохраняется в `LastResolveError`, конфиг не трогается; IP-литерал пропускается
+- [x] живой адрес читается из работающего `config.json` (outbound `gateway`) при старте и после каждого `Apply`
+- [x] `twarp daemon` (скрытая): требует root, `TWARP_OWNER_*`, root-owned бинарь; пишет в `twarpd.log`
+- [x] тесты с фейковыми Service/резолвером/источником: смена адреса → ровно один Apply; тот же адрес → ни одного; ошибка резолва → нет Apply и есть `LastResolveError`; IP-литерал → нет резолва; параллельные `up` и сетевое событие сериализуются; `status` отдаёт живой адрес и `Stale`
+- [x] ➕ (ревью 1) `twarp daemon` включает `fsutil.GuardUserFiles(owner)`: чтение файлов владельца под root с `O_NOFOLLOW`, `O_NONBLOCK`, только обычный файл владельца
+- [x] ➕ (ревью 4) `app.LockApply`: эксклюзивный `flock` на `<out>/.apply.lock` в `Apply` и `Install`
+- [x] ➕ (ревью 10) `up` вызывает `Apply`, только если конфиг устарел или ещё не применён
+- [x] ➕ (ревью 12) кэш резолва на 30 с: `Apply` после сетевой проверки не ждёт DNS повторно
+- [x] `make test` зелёный
 
 ### Task 6: launchd: установка демона
 

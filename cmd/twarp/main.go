@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"time"
 
@@ -87,10 +88,15 @@ func defaultCLIDeps() cliDeps {
 // app returns the application service for actor; every subcommand goes
 // through it instead of touching config, state or launchd directly.
 func (deps cliDeps) app(actor string) *app.Service {
+	return deps.appWithResolver(actor, nil)
+}
+
+// appWithResolver is app with a gateway resolver; twarpd passes its cache.
+func (deps cliDeps) appWithResolver(actor string, resolve func(context.Context, string) (netip.AddrPort, error)) *app.Service {
 	return app.New(app.Deps{
 		Sys: deps.Sys, Runner: deps.Runner, FS: deps.FS, Dial: deps.Dial,
 		HTTPClient: deps.HTTPClient, LookupIP: deps.LookupIP, Now: deps.Now, Clash: deps.Clash,
-		ResolverDir: deps.ResolverDir,
+		ResolverDir: deps.ResolverDir, ResolveGateway: resolve,
 	}, actor)
 }
 
@@ -130,6 +136,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runStatus(args[1:], stdout, stderr, deps)
 	case "tui":
 		return runTUI(args[1:], stdout, stderr, deps)
+	case "daemon":
+		return runDaemon(args[1:], stdout, stderr, deps)
 	case "mcp":
 		return runMCP(args[1:], stdout, stderr, deps)
 	}

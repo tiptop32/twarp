@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
@@ -123,6 +124,16 @@ func (s *Service) GeoUpdate(ctx context.Context) (geo.Report, error) {
 	options.Dir = filepath.Join(config.OutputDir(s.deps.Sys), "geo")
 	options.AuditFile = RootAuditFile(s.deps.Sys)
 	return geo.Update(ctx, options)
+}
+
+// GeoReportText lists the files a geo update wrote, one per line, as the CLI
+// and twarpd print them.
+func GeoReportText(report geo.Report) string {
+	lines := make([]string, 0, len(report.Files))
+	for _, file := range report.Files {
+		lines = append(lines, fmt.Sprintf("updated %s: %d bytes, mtime %s", file.Name, file.Size, file.ModTime.UTC().Format(time.RFC3339Nano)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // RenderInputs loads config, secrets and gateway state, resolves

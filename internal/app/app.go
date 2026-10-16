@@ -112,6 +112,11 @@ func SingBoxLogFile(system config.Sys) string {
 	return filepath.Join(LogDir(system), "sing-box.log")
 }
 
+// Audit appends a record for this service's actor to the root audit log.
+func (s *Service) Audit(operation, result string) error {
+	return s.appendRootAudit(operation, result)
+}
+
 func (s *Service) appendRootAudit(operation, result string) error {
 	path := RootAuditFile(s.deps.Sys)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
