@@ -175,10 +175,11 @@ func TestRunStartFailsOnUnexpectedPrintError(t *testing.T) {
 func TestRunStopPersistsDisabledStateIdempotently(t *testing.T) {
 	for _, response := range []sysexec.Response{{}, {Err: errors.New("Boot-out failed: 3: No such process")}} {
 		fixture := newCLIRenderFixture(t, 0)
-		runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
-			{Call: bootoutCall, Response: response},
-			{Call: disableCall},
-		}}
+		expect := []sysexec.ExpectedCall{{Call: bootoutCall, Response: response}}
+		if response.Err == nil {
+			expect = append(expect, sysexec.ExpectedCall{Call: printCall, Response: sysexec.Response{Err: errors.New("Could not find service")}})
+		}
+		runner := &sysexec.Fake{Expect: append(expect, sysexec.ExpectedCall{Call: disableCall})}
 		fixture.deps.Runner = runner
 		fixture.deps.FS = &cliFakeFS{}
 		stdout, stderr, code := runCLIForTest([]string{"stop"}, fixture.deps)
@@ -313,6 +314,7 @@ func TestResolverFilesFollowTunnelLifecycle(t *testing.T) {
 
 	runner = &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: bootoutCall},
+		{Call: printCall, Response: sysexec.Response{Err: errors.New("Could not find service")}},
 		{Call: disableCall},
 		{Call: flushCall},
 	}}

@@ -347,8 +347,11 @@ func TestUninstallIsIdempotent(t *testing.T) {
 	absent := errors.New("launchctl bootout: No such process")
 	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: errors.New("Could not find service")}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.geo"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.geo"}}, Response: sysexec.Response{Err: errors.New("Could not find service")}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}},
+		{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", "system/dev.twarp.daemon"}}, Response: sysexec.Response{Err: errors.New("Could not find service")}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.singbox"}}, Response: sysexec.Response{Err: absent}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.geo"}}, Response: sysexec.Response{Err: absent}},
 		{Call: sysexec.Call{Name: "launchctl", Args: []string{"bootout", "system/dev.twarp.daemon"}}, Response: sysexec.Response{Err: absent}},
@@ -619,6 +622,48 @@ func TestInstallDaemonFailureKeepsSingBoxRunning(t *testing.T) {
 	}
 	if got := filesystem.files[paths.OutConfig()].data; got != "new config\n" {
 		t.Errorf("config after twarpd failure = %q, want the new config kept", got)
+	}
+}
+
+// Reinstalling over running services: launchctl bootout returns before launchd
+// removes the service, and a bootstrap in that window fails with
+// "5: Input/output error". Install must wait for the removal first.
+func TestInstallWaitsForOldServicesToGoBeforeBootstrap(t *testing.T) {
+	t.Parallel()
+
+	gone := errors.New("launchctl print: Could not find service")
+	calls := []sysexec.ExpectedCall{}
+	for _, call := range successfulInstallCalls(t) {
+		if call.Args[0] != "bootout" {
+			calls = append(calls, call)
+			continue
+		}
+		target := call.Args[1]
+		calls = append(calls,
+			sysexec.ExpectedCall{Call: call.Call},
+			sysexec.ExpectedCall{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", target}}, Response: sysexec.Response{Output: []byte("state = running\n")}},
+			sysexec.ExpectedCall{Call: sysexec.Call{Name: "launchctl", Args: []string{"print", target}}, Response: sysexec.Response{Err: gone}},
+		)
+	}
+	paths := installPaths()
+	filesystem := &fakeFS{operations: &[]fsOperation{}}
+	runner := &sysexec.Fake{Expect: calls}
+	err := launchd.Install(context.Background(), launchd.Deps{
+		Runner:     runner,
+		Sys:        rootSystem(),
+		FS:         filesystem,
+		Executable: func() (string, error) { return "/usr/local/bin/twarp", nil },
+	}, launchd.Options{
+		Paths:        paths,
+		LockState:    func() (func(), error) { return func() {}, nil },
+		RenderConfig: func() ([]byte, error) { return []byte("new config\n"), nil },
+		WriteRuleSet: func(string, int, int) error { return nil },
+	})
+	if err != nil {
+		t.Fatalf("Install() error = %v", err)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
 	}
 }
 

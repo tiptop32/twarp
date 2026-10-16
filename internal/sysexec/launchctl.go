@@ -2,8 +2,10 @@ package sysexec
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -78,21 +80,51 @@ func Bootstrap(ctx context.Context, runner Runner, domain, plistPath string) err
 	return err
 }
 
+// BootoutTimeout bounds how long Bootout waits for launchd to remove a
+// service. launchd sends SIGKILL 20 s after SIGTERM by default (ExitTimeOut),
+// so the removal finishes well within it.
+const BootoutTimeout = 30 * time.Second
+
+// bootoutPoll is the interval between launchctl print checks after bootout.
+const bootoutPoll = 50 * time.Millisecond
+
 // Bootout removes a service by its target (domain/label). An absent service is
 // treated as success to make uninstall idempotent. The target form is used on
 // purpose: on macOS 15 an unloaded service addressed by plist path fails with
 // "5: Input/output error", which cannot be told apart from a real failure.
+//
+// launchctl bootout can return before launchd has removed the service; a
+// bootstrap issued in that window fails with "5: Input/output error". Bootout
+// therefore returns only once launchctl print reports the service missing.
 func Bootout(ctx context.Context, runner Runner, target string) error {
 	output, err := runner.Run(ctx, "launchctl", "bootout", target)
-	if err == nil {
-		return nil
+	if err != nil {
+		detail := string(output) + "\n" + err.Error()
+		if strings.Contains(detail, "No such process") ||
+			strings.Contains(detail, "Could not find specified service") {
+			return nil
+		}
+		return err
 	}
-	detail := string(output) + "\n" + err.Error()
-	if strings.Contains(detail, "No such process") ||
-		strings.Contains(detail, "Could not find specified service") {
-		return nil
+	return waitRemoved(ctx, runner, target)
+}
+
+func waitRemoved(ctx context.Context, runner Runner, target string) error {
+	ctx, cancel := context.WithTimeout(ctx, BootoutTimeout)
+	defer cancel()
+	for {
+		output, err := runner.Run(ctx, "launchctl", "print", target)
+		if PrintState(output, err) == ServiceMissing {
+			return nil
+		}
+		timer := time.NewTimer(bootoutPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("launchd did not remove %s after bootout: %w", target, ctx.Err())
+		case <-timer.C:
+		}
 	}
-	return err
 }
 
 // Kill sends signal to a launchd service target.
