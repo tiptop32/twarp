@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"os"
 	"syscall"
+
+	"github.com/tiptop32/twarp/internal/fsutil"
 )
 
 // ReadPrefixes reads the persisted gateway prefixes under a shared lock.
@@ -27,8 +29,11 @@ func ReadPrefixes(file, lockFile string) ([]netip.Prefix, error) {
 	return state.prefixes(), nil
 }
 
+// maxStateBytes bounds gateway-ips.json: 256 entries take far less.
+const maxStateBytes = 1 << 20
+
 func readStateFile(file string) (diskState, error) {
-	data, err := os.ReadFile(file)
+	data, err := fsutil.ReadUserFile(file, maxStateBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return diskState{Version: 1, CIDRs: []Entry{}}, nil
 	}
@@ -65,7 +70,7 @@ func readStateFile(file string) (diskState, error) {
 // reading the state until the rule-set is written, so a concurrent Add cannot
 // be overwritten by a stale list.
 func LockShared(lockFile string) (func(), error) {
-	lock, err := os.Open(lockFile)
+	lock, err := fsutil.OpenUserFile(lockFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return func() {}, nil
 	}

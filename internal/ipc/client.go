@@ -42,13 +42,17 @@ func Call(ctx context.Context, path string, request Request) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
-	if _, err := connection.Write(append(data, '\n')); err != nil {
-		return Response{}, fmt.Errorf("send to twarpd: %w", err)
-	}
+	// A refused or busy caller gets its answer before the server reads the
+	// request, and the server may close first: a failed write still has a
+	// response to read.
+	_, writeErr := connection.Write(append(data, '\n'))
 	line, err := bufio.NewReaderSize(io.LimitReader(connection, maxResponseBytes), maxResponseBytes).ReadSlice('\n')
 	if err != nil && (!errors.Is(err, io.EOF) || len(line) == 0) {
 		if ctx.Err() != nil {
 			return Response{}, fmt.Errorf("twarpd did not answer %s in time: %w", request.Op, ctx.Err())
+		}
+		if writeErr != nil {
+			return Response{}, fmt.Errorf("send to twarpd: %w", writeErr)
 		}
 		return Response{}, fmt.Errorf("read twarpd response: %w", err)
 	}

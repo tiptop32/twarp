@@ -79,10 +79,12 @@ type Deps struct {
 
 // Options contains resolved inputs and prepared render operations for Install.
 type Options struct {
-	Paths        config.Paths
-	Config       config.Config
-	Secrets      config.Secrets
-	GeoUpdate    func(context.Context) error
+	Paths     config.Paths
+	Config    config.Config
+	Secrets   config.Secrets
+	GeoUpdate func(context.Context) error
+	// LockApply serializes install with apply and twarpd; nil skips it.
+	LockApply    func() (func(), error)
 	LockState    func() (func(), error)
 	RenderConfig func() ([]byte, error)
 	WriteRuleSet func(dir string, uid, gid int) error
@@ -156,6 +158,13 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 
 	if options.LockState == nil || options.RenderConfig == nil || options.WriteRuleSet == nil {
 		return errors.New("render operations are incomplete")
+	}
+	if options.LockApply != nil {
+		releaseApply, err := options.LockApply()
+		if err != nil {
+			return err
+		}
+		defer releaseApply()
 	}
 	releaseState, err := options.LockState()
 	if err != nil {

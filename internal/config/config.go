@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
@@ -87,7 +86,7 @@ type rawConfig struct {
 
 // Load reads, defaults, normalizes, and validates twarp.yaml.
 func Load(path string) (Config, error) {
-	file, err := os.Open(path)
+	file, err := fsutil.OpenUserFile(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("open config %q: %w", path, err)
 	}
@@ -116,19 +115,18 @@ func Load(path string) (Config, error) {
 
 // LoadSecrets reads secrets.yaml after checking that no group or other bits are set.
 func LoadSecrets(path string) (Secrets, error) {
-	info, err := os.Stat(path)
+	file, err := fsutil.OpenUserFile(path)
+	if err != nil {
+		return Secrets{}, fmt.Errorf("open secrets %q: %w", path, err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
 	if err != nil {
 		return Secrets{}, fmt.Errorf("stat secrets %q: %w", path, err)
 	}
 	if permissions := info.Mode().Perm(); permissions&0o077 != 0 {
 		return Secrets{}, fmt.Errorf("secrets file %q has permissions %04o; want 0600 or stricter", path, permissions)
 	}
-
-	file, err := os.Open(path)
-	if err != nil {
-		return Secrets{}, fmt.Errorf("open secrets %q: %w", path, err)
-	}
-	defer func() { _ = file.Close() }()
 
 	var secrets Secrets
 	decoder := yaml.NewDecoder(file)

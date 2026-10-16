@@ -5,8 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
+	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // WriteFileAtomic replaces path with data and exactly mode. The data is synced
@@ -123,4 +128,124 @@ func AppendJSONLine(path string, record any) error {
 		return err
 	}
 	return file.Close()
+}
+
+// userFileOwner is the uid every file under the user's twarp home must belong
+// to when a root daemon reads it; -1 turns the check off.
+var userFileOwner atomic.Int64
+
+func init() { userFileOwner.Store(-1) }
+
+// GuardUserFiles makes OpenUserFile refuse anything but regular files owned
+// by uid that are not symlinks. twarpd calls it once at start: it reads the
+// owner's files as root without a password prompt, so a symlink such as
+// twarp.yaml -> /etc/master.passwd must not turn error messages into a way to
+// read root-only files, and a FIFO must not hang the daemon.
+func GuardUserFiles(uid int) { userFileOwner.Store(int64(uid)) }
+
+// OpenUserFile opens a file from the user's twarp home for reading. Without
+// GuardUserFiles it is os.Open.
+func OpenUserFile(path string) (*os.File, error) {
+	owner := userFileOwner.Load()
+	if owner < 0 {
+		return os.Open(path)
+	}
+	// O_NONBLOCK keeps open from waiting on a FIFO; the fstat below rejects it.
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return nil, fmt.Errorf("refusing to read %s as root: it is a symlink", path)
+		}
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		_ = unix.Close(fd)
+		return nil, &os.PathError{Op: "stat", Path: path, Err: err}
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || int64(stat.Uid) != owner {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("refusing to read %s as root: not a regular file owned by uid %d", path, owner)
+	}
+	if err := unix.SetNonblock(fd, false); err != nil {
+		_ = unix.Close(fd)
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(fd), path), nil
+}
+
+// ReadUserFile reads a file opened with OpenUserFile, up to limit bytes.
+func ReadUserFile(path string, limit int64) ([]byte, error) {
+	file, err := OpenUserFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, limit)
+	}
+	return data, nil
+}
+
+// TrustedExecutable resolves path and checks that the file and every directory
+// above it belong to root (or ownerUID) and are not writable by group or
+// others. A world-writable directory with the sticky bit, such as /tmp, is
+// allowed: others cannot rename what they do not own. Running the resolved
+// path keeps a later symlink swap from changing what runs as root.
+func TrustedExecutable(path string, ownerUID int) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err = filepath.Abs(resolved); err != nil {
+		return "", err
+	}
+	for current := resolved; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return "", err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return "", fmt.Errorf("cannot read the owner of %s", current)
+		}
+		if uid := int(stat.Uid); uid != 0 && uid != ownerUID {
+			return "", fmt.Errorf("%s is owned by uid %d, not root", current, uid)
+		}
+		sticky := info.IsDir() && info.Mode()&os.ModeSticky != 0
+		if info.Mode().Perm()&0o022 != 0 && !sticky {
+			return "", fmt.Errorf("%s is writable by group or others", current)
+		}
+		if parent := filepath.Dir(current); parent == current {
+			return resolved, nil
+		}
+	}
+}
+
+// LockExclusive takes an exclusive flock on path, creating it 0600, and
+// returns its release function. Apply and install hold it while they replace
+// config.json, so a sudo command and twarpd never interleave.
+func LockExclusive(path string) (func(), error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open lock %q: %w", path, err)
+	}
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
+		if !errors.Is(err, syscall.EINTR) {
+			break
+		}
+	}
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock %q: %w", path, err)
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
 }

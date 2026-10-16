@@ -186,6 +186,11 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", s.failApply(err)
 	}
+	releaseApply, err := LockApply(resolved)
+	if err != nil {
+		return "", s.failApply(err)
+	}
+	defer releaseApply()
 	// Hold LOCK_SH from reading the state until the rule-set is written: a
 	// concurrent gateway add (CLI, TUI or MCP) waits instead of being overwritten.
 	release, err := state.LockShared(resolved.LockFile())
@@ -348,6 +353,16 @@ func restoreApplyConfig(path string, previous []byte, existed bool) error {
 		return fmt.Errorf("remove new sing-box config: %w", err)
 	}
 	return nil
+}
+
+// LockApply serializes the processes that replace config.json: sudo twarp
+// apply, sudo twarp install and twarpd. Before install the output directory
+// does not exist and there is nothing to protect.
+func LockApply(paths config.Paths) (func(), error) {
+	if _, err := os.Stat(paths.Out); errors.Is(err, os.ErrNotExist) {
+		return func() {}, nil
+	}
+	return fsutil.LockExclusive(filepath.Join(paths.Out, ".apply.lock"))
 }
 
 // failApply records err in the root audit log and returns it unchanged.

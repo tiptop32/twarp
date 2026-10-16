@@ -40,6 +40,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	var prefixes []netip.Prefix
 	options := launchd.Options{
 		Paths: paths, Config: cfg, Secrets: secrets,
+		LockApply: func() (func(), error) { return app.LockApply(paths) },
 		LockState: func() (func(), error) {
 			return state.LockShared(paths.LockFile())
 		},
