@@ -69,7 +69,9 @@ twarp status ────────┘  twarpd.sock ── twarpd┼─ netwat
 4. **Протокол без аргументов.** Одна строка JSON на запрос и на ответ: `{"v":1,"op":"up"}`. Операции фиксированы: `up`, `down`, `apply`, `geo_update`, `status`. Никаких путей и данных от клиента, поэтому поверхность атаки не шире, чем «владелец может включить и выключить свой VPN». Неизвестная версия или операция → ошибка.
 5. **Операции сериализуются.** Один mutex в демоне: `up`, сетевое переприменение и `apply` не идут параллельно.
 6. **Смена сети без cgo.** `netwatch` читает `AF_ROUTE` сокет (`RTM_NEWADDR`, `RTM_DELADDR`, `RTM_IFINFO`, `RTM_ADD`/`RTM_DELETE` для default), сглаживает пачку событий (debounce 2 с) и дополнительно тикает раз в 30 с на случай пропущенных событий. На каждое срабатывание демон резолвит хост `gateway.socks`; если IP отличается от адреса в работающем конфиге, вызывает `Apply`. IP-литерал в yaml не резолвится, и переприменение не запускается.
-7. **Резолв выбирает IPv4.** Если имя вернуло несколько адресов, берётся первый IPv4 (как `dns.strategy: prefer_ipv4`), иначе первый IPv6. Ошибка резолва не трогает работающий конфиг: пишется в лог и в status (`WARN gateway: proxyhost.local не резолвится, работаю на 192.0.2.10`).
+7. **Резолв выбирает IPv4.** Если имя вернуло несколько адресов, берётся первый IPv4 (как `dns.strategy: prefer_ipv4`), иначе первый глобальный или ULA IPv6. Link-local (`fe80::/10`) отбрасывается: mDNS отдаёт его первым, а без зоны интерфейса sing-box не подключится. Ошибка резолва не трогает работающий конфиг: пишется в лог и в status (`WARN gateway: proxyhost.local не резолвится, работаю на 192.0.2.10`).
+   - Резолвер только системный (`net.DefaultResolver` в режиме по умолчанию: на darwin он идёт через libSystem и mDNSResponder и с cgo, и без). Чистый Go-резолвер (`GODEBUG=netdns=go`) спрашивает DNS роутера и `.local` не видит: тест фиксирует, что демон не выставляет `netdns=go`.
+   - Несуществующее `.local`-имя отвечает таймаутом через 5 с, а не мгновенной ошибкой. Резолв идёт с таймаутом 5 с вне mutex операций, чтобы `twarp up`/`down` не ждали сетевой проверки.
 8. **Рендер получает готовый адрес.** `render.Options.GatewaySocks netip.AddrPort` заполняется в `app.renderInputs`; `render` больше не парсит хост из конфига. Правило `ip_cidr <socks>/32 → direct` остаётся третьим.
 9. **Честный status.** Демон отвечает на `status` адресом шлюза из работающего `config.json` и его mtime. Без демона CLI сравнивает mtime `twarp.yaml`/`secrets.yaml` с `stat` на `/usr/local/etc/twarp/config.json` (stat доступен без root). Проверка доступности шлюза идёт по живому адресу.
 10. **Команды.** `twarp up`: если не установлено, просит один раз `sudo twarp install` и выходит; иначе через сокет `apply` + `start`. `twarp down`: через сокет `stop`. `twarp` без аргументов: TUI, если stdout — терминал, иначе usage. `start`/`stop`/`apply`/`geo update` без sudo идут через сокет; под sudo работают напрямую, как сейчас.
@@ -143,10 +145,10 @@ type LiveStatus struct {
 - Modify: `internal/app/lifecycle.go` (`renderInputs`)
 
 - [ ] валидация: хост `gateway.socks` — IP или DNS-имя (RFC 1123 метки, без схемы и пути); IP по-прежнему проверяется против loopback/multicast
-- [ ] `gwaddr.Resolve(ctx, lookup, hostport) (netip.AddrPort, error)`: IP-литерал без сети; имя → первый IPv4, иначе первый IPv6; отказ на loopback/unspecified результат
+- [ ] `gwaddr.Resolve(ctx, lookup, hostport) (netip.AddrPort, error)`: IP-литерал без сети; имя → первый IPv4, иначе первый не-link-local IPv6; отказ на loopback/unspecified/link-local результат; таймаут 5 с
 - [ ] `render.Options.GatewaySocks netip.AddrPort`; outbound `gateway` и правило `ip_cidr → direct` строятся из него; порядок маршрутов не меняется
 - [ ] `renderInputs` резолвит через `Deps.LookupIP`
-- [ ] тесты: таблица валидации (IP, IPv6 в скобках, `.local`, мусор, схема), резолв (v4 предпочтён, только v6, пусто, ошибка, loopback), golden рендера с адресом из резолвера, тест порядка маршрутов
+- [ ] тесты: таблица валидации (IP, IPv6 в скобках, `.local`, мусор, схема), резолв (ответ mDNS `[fe80::…, 192.0.2.10]` → `192.0.2.10`; только link-local → ошибка; только глобальный v6; пусто; таймаут; loopback), golden рендера с адресом из резолвера, тест порядка маршрутов
 - [ ] `make test` зелёный
 
 ### Task 3: IPC: протокол, сервер с проверкой peer uid, клиент
@@ -256,7 +258,7 @@ type LiveStatus struct {
 **Ручная проверка:**
 - `make install && sudo twarp install`, затем `twarp down`/`twarp up` без пароля; `ls -l /var/run/twarp/twarpd.sock`.
 - `gateway.socks: <имя прокси-хоста>.local:8080`, `twarp apply`; переключить Wi-Fi на другую сеть с тем же прокси-хостом: в `twarpd.log` строка `gateway address changed`, `twarp status` показывает новый live-адрес за ≤ 10 с, `curl` до домена шлюза работает.
-- Проверить, что mDNS (`.local`) резолвится из root-демона при поднятом TUN (sing-box может перехватывать multicast); если нет, задокументировать имя через DNS роутера (`home.arpa`) как основной вариант.
+- Повторить проверку mDNS уже из root-демона. Проверка 2026-10-16 от пользователя при поднятом TUN (`utun4`, sing-box 1.14.2): `.local`-имя прокси-хоста → `[fe80::…, <IPv4 прокси>]` за 6–13 мс через `net.DefaultResolver` (сборки с cgo и `CGO_ENABLED=0`); с `GODEBUG=netdns=go` → `no such host`; несуществующее имя → таймаут 5 с; `curl --socks5-hostname <имя>.local:8080` → 302. Root ходит в тот же mDNSResponder, поэтому расхождения не ожидается, но оно не проверено.
 - Попытка `twarp down` от другого локального пользователя → `forbidden` и запись в root audit.
 
 **Безопасность:**
