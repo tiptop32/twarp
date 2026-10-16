@@ -248,12 +248,15 @@ type LiveStatus struct {
 - Modify: `internal/app/status.go`, `internal/app/status_test.go`
 - Modify: `cmd/twarp/cmd_status.go`, `cmd/twarp/cmd_tui.go`, `cmd/twarp/cmd_tui_test.go`
 
-- [ ] status: живой адрес шлюза из демона, иначе из `config.json`, если читается; проверка доступности по живому адресу; строка `gateway: configured proxyhost.local:8080 → live 192.0.2.10:8080`
-- [ ] `WARN config: twarp.yaml changed after the last apply; run: twarp apply` по `Stale` или по сравнению mtime без демона
-- [ ] `WARN gateway: <host> does not resolve; running on <live>` из `LastResolveError`
-- [ ] TUI: `s`/`a`/`u` через `ipc.Call` без сворачивания; fallback на sudo, только если демон недоступен; тексты подсказок без «(sudo)»
-- [ ] тесты: сценарий 2026-10-16 (yaml `.173`, живой `.105`) даёт FAIL/WARN, а не OK; mtime-fallback; TUI-действия вызывают фейковый клиент; fallback на sudo при `ErrDaemonUnavailable`
-- [ ] `make test` зелёный
+- [x] status: живой адрес шлюза из демона, иначе из `config.json`, если читается; проверка доступности по живому адресу; строка `gateway: configured proxyhost.local:8080 → live 192.0.2.10:8080`
+- [x] `WARN config: twarp.yaml changed after the last apply; run: twarp apply` по `Stale` или по сравнению mtime без демона
+- [x] `WARN gateway: <host> does not resolve; running on <live>` из `LastResolveError`
+- [x] TUI: `s`/`a`/`u` через `ipc.Call` без сворачивания; fallback на sudo, только если демон недоступен; тексты подсказок без «(sudo)»
+- [x] тесты: сценарий 2026-10-16 (yaml `.173`, живой `.105`) даёт FAIL/WARN, а не OK; mtime-fallback; TUI-действия вызывают фейковый клиент; fallback на sudo при `ErrDaemonUnavailable`
+- [x] ➕ при литерале в `twarp.yaml`, отличном от живого адреса, строка шлюза — WARN (`sing-box runs on …, but twarp.yaml has …; run: twarp apply`); проба идёт на живой адрес. Источники живого адреса: демон → `config.json` (root) → только mtime (пользователь)
+- [x] ➕ `cliDeps.IPC` задаётся только в `defaultCLIDeps`: тесты никогда не стучатся в настоящий twarpd хоста
+- [x] ➕ TUI показывает `gateway.socks → живой адрес`, когда они различаются
+- [x] `make test` зелёный
 
 ### Task 9: Проба шлюза через SOCKS5-рукопожатие
 

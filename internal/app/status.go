@@ -65,7 +65,10 @@ type Status struct {
 	TunnelInterface string
 	TunnelAddr      string
 
+	// GatewaySocks is gateway.socks as configured; GatewayLive is the
+	// address sing-box runs on, when known.
 	GatewaySocks     string
+	GatewayLive      string
 	GatewayReachable bool
 	GatewayCIDRs     int
 
@@ -118,7 +121,9 @@ func (s *Service) Status(ctx context.Context, options StatusOptions) Status {
 	}
 
 	s.checkSingBox(ctx, &status, cfg, secrets)
-	s.checkGateway(ctx, &status, cfg, gatewayCredentials(secrets), options.Network)
+	live := s.liveGateway(ctx, paths)
+	s.checkGateway(ctx, &status, cfg, live, gatewayCredentials(secrets), options.Network)
+	checkLive(&status, live)
 	s.checkTunnel(ctx, &status)
 	checkGatewayCIDRs(&status, paths)
 	checkGeo(&status, paths.GeoDir(), s.now())
@@ -156,14 +161,78 @@ func gatewayCredentials(secrets config.Secrets) *socksprobe.Credentials {
 	return &socksprobe.Credentials{User: secrets.GatewaySocksUser, Password: secrets.GatewaySocksPassword}
 }
 
-// checkGateway dials the SOCKS gateway and runs the SOCKS5 handshake, so an
-// unrelated service on the port does not pass. With network it also CONNECTs
-// through the gateway to gateway.dns:53: a gateway that is up while its own
-// upstream (the VPN on the proxy host) is down answers "network unreachable".
-// The periodic probe stays at the handshake: the gateway logs every CONNECT.
-func (s *Service) checkGateway(ctx context.Context, status *Status, cfg config.Config, creds *socksprobe.Credentials, network bool) {
+// liveState is what status knows about the running config.
+type liveState struct {
+	gateway      netip.AddrPort // valid when the running gateway is known
+	stale        bool
+	resolveError string
+}
+
+// liveGateway asks twarpd, else reads config.json (root only, 0600), else
+// only compares mtimes, which stat allows without read permission.
+func (s *Service) liveGateway(ctx context.Context, paths config.Paths) liveState {
+	if s.deps.Daemon != nil {
+		daemonCtx, cancel := context.WithTimeout(ctx, statusProbeTimeout)
+		live, err := s.deps.Daemon(daemonCtx)
+		cancel()
+		if err == nil && live != nil {
+			state := liveState{stale: live.Stale, resolveError: live.LastResolveError}
+			if addr, err := netip.ParseAddrPort(live.GatewayLive); err == nil {
+				state.gateway = addr
+			}
+			return state
+		}
+	}
+	var state liveState
+	appliedAt, err := AppliedAt(paths.OutConfig())
+	if err != nil {
+		return state // not installed
+	}
+	if running, err := ReadLiveConfig(paths.OutConfig()); err == nil {
+		state.gateway = running.Gateway
+	}
+	state.stale, _ = ConfigStale(paths, appliedAt)
+	return state
+}
+
+func checkLive(status *Status, live liveState) {
+	if live.resolveError != "" {
+		detail := live.resolveError
+		if live.gateway.IsValid() {
+			detail += "; running on " + live.gateway.String()
+		}
+		status.add(LevelWarn, "gateway", detail)
+	}
+	if live.stale {
+		status.add(LevelWarn, "config", "twarp.yaml or secrets.yaml changed after the last apply; run: twarp apply")
+	}
+}
+
+// checkGateway dials the SOCKS gateway sing-box actually uses (the live
+// address when known, else gateway.socks) and runs the SOCKS5 handshake, so
+// an unrelated service on the port does not pass. A gateway.socks literal
+// that differs from the live address is a warning, not OK: the running
+// config is out of date. With network it also CONNECTs through the gateway
+// to gateway.dns:53: a gateway that is up while its own upstream (the VPN on
+// the proxy host) is down answers "network unreachable". The periodic probe
+// stays at the handshake: the gateway logs every CONNECT.
+func (s *Service) checkGateway(ctx context.Context, status *Status, cfg config.Config, live liveState, creds *socksprobe.Credentials, network bool) {
+	status.GatewaySocks = cfg.Gateway.Socks
 	address := cfg.Gateway.Socks
-	status.GatewaySocks = address
+	reachable := address + " is reachable"
+	okLevel := LevelOK
+	if live.gateway.IsValid() {
+		address = live.gateway.String()
+		status.GatewayLive = address
+		configured, err := netip.ParseAddrPort(cfg.Gateway.Socks)
+		switch {
+		case err == nil && configured != live.gateway:
+			okLevel = LevelWarn
+			reachable = fmt.Sprintf("sing-box runs on %s, but twarp.yaml has %s; run: twarp apply", address, cfg.Gateway.Socks)
+		case err != nil:
+			reachable = fmt.Sprintf("configured %s → live %s is reachable", cfg.Gateway.Socks, address)
+		}
+	}
 	if s.deps.Dial == nil {
 		status.add(LevelFail, "gateway", "TCP dialer is unavailable")
 		return
@@ -182,7 +251,7 @@ func (s *Service) checkGateway(ctx context.Context, status *Status, cfg config.C
 	}
 	status.GatewayReachable = true
 	if !network {
-		status.add(LevelOK, "gateway", address+" is reachable")
+		status.add(okLevel, "gateway", reachable)
 		return
 	}
 	dns, err := netip.ParseAddr(cfg.Gateway.DNS)
@@ -195,7 +264,7 @@ func (s *Service) checkGateway(ctx context.Context, status *Status, cfg config.C
 	defer cancelConnect()
 	switch err := socksprobe.Connect(connectCtx, connection, target); {
 	case err == nil:
-		status.add(LevelOK, "gateway", fmt.Sprintf("%s is reachable and connects to %s", address, target))
+		status.add(okLevel, "gateway", fmt.Sprintf("%s; connects to %s", reachable, target))
 	case errors.Is(err, socksprobe.ErrUpstreamDown):
 		status.add(LevelFail, "gateway", address+": upstream VPN is down")
 	default:

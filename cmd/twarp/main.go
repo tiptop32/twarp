@@ -84,6 +84,9 @@ func defaultCLIDeps() cliDeps {
 		LookupIP:    net.DefaultResolver.LookupIP,
 		Now:         time.Now,
 		IsTerminal:  isTerminal,
+		IPC: func(ctx context.Context, request ipc.Request) (ipc.Response, error) {
+			return ipc.Call(ctx, ipc.SocketPath(os.Getenv), request)
+		},
 		MCPTransport: func(io.Reader, io.Writer) mcpTransport {
 			return stdioMCPTransport()
 		},
@@ -99,7 +102,7 @@ func (deps cliDeps) app(actor string) *app.Service {
 	return app.New(app.Deps{
 		Sys: deps.Sys, Runner: deps.Runner, FS: deps.FS, Dial: deps.Dial,
 		HTTPClient: deps.HTTPClient, LookupIP: deps.LookupIP, Now: deps.Now, Clash: deps.Clash,
-		ResolverDir: deps.ResolverDir,
+		ResolverDir: deps.ResolverDir, Daemon: deps.daemonLive,
 	}, actor)
 }
 

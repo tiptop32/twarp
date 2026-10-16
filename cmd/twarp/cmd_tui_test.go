@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/tiptop32/twarp/internal/app"
+	"github.com/tiptop32/twarp/internal/ipc"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/state"
 )
@@ -29,9 +30,12 @@ type fakeTUIBackend struct {
 	logs        []string
 	installed   bool
 	sudoErr     error
-	added       []string
-	removed     []string
-	sudo        [][]string
+	// daemonErr defaults to no daemon, so root actions fall back to sudo
+	daemonErr error
+	daemonOps []string
+	added     []string
+	removed   []string
+	sudo      [][]string
 }
 
 func (backend *fakeTUIBackend) Status(_ context.Context, options app.StatusOptions) app.Status {
@@ -79,6 +83,14 @@ func (backend *fakeTUIBackend) RemoveGatewayCIDR(_ context.Context, cidr string)
 }
 
 func (backend *fakeTUIBackend) Installed() bool { return backend.installed }
+
+func (backend *fakeTUIBackend) Daemon(_ context.Context, op string) (string, error) {
+	backend.daemonOps = append(backend.daemonOps, op)
+	if backend.daemonErr != nil {
+		return "", backend.daemonErr
+	}
+	return op + " via twarpd", nil
+}
 
 func (backend *fakeTUIBackend) SudoCommand(args ...string) (*exec.Cmd, error) {
 	backend.sudo = append(backend.sudo, args)
@@ -237,10 +249,11 @@ func TestTUINetCheckShowsEgress(t *testing.T) {
 
 func TestTUIRootActionsUseSudoWithSameBinary(t *testing.T) {
 	backend := dashboardBackend()
+	backend.daemonErr = ipc.ErrDaemonUnavailable
 	model := initModel(t, backend)
 
 	model = send(t, model, key("s"))
-	if view := plainView(model); !strings.Contains(view, "stop the tunnel and disable autostart? sudo twarp stop [y/N]") {
+	if view := plainView(model); !strings.Contains(view, "stop the tunnel and disable autostart? twarp down [y/N]") {
 		t.Fatalf("view = %q, want stop confirmation", view)
 	}
 	model = send(t, model, key("n"))
@@ -271,7 +284,7 @@ func TestTUIRootActionsUseSudoWithSameBinary(t *testing.T) {
 	backend.status.TunnelActive = false
 	model = send(t, model, key("R"))
 	model = send(t, model, key("s"))
-	if view := plainView(model); !strings.Contains(view, "start the tunnel? sudo twarp start [y/N]") {
+	if view := plainView(model); !strings.Contains(view, "start the tunnel? twarp up [y/N]") {
 		t.Fatalf("view = %q, want start confirmation", view)
 	}
 	// A refresh while the prompt is open must not flip the confirmed action.
@@ -280,6 +293,39 @@ func TestTUIRootActionsUseSudoWithSameBinary(t *testing.T) {
 	send(t, model, key("y"))
 	if last := backend.sudo[len(backend.sudo)-1]; strings.Join(last, " ") != "start" {
 		t.Fatalf("sudo after refresh = %v, want start", last)
+	}
+}
+
+func TestTUIRootActionsGoThroughDaemon(t *testing.T) {
+	backend := dashboardBackend()
+	model := initModel(t, backend)
+
+	model = send(t, model, key("s"))
+	model = send(t, model, key("y"))
+	if view := plainView(model); !strings.Contains(view, "down via twarpd") {
+		t.Fatalf("view = %q, want the daemon summary", view)
+	}
+	model = send(t, model, key("a"))
+	send(t, model, key("u"))
+	if strings.Join(backend.daemonOps, ",") != "down,apply,geo_update" || len(backend.sudo) != 0 {
+		t.Fatalf("daemon ops = %v, sudo = %v; want everything through twarpd", backend.daemonOps, backend.sudo)
+	}
+
+	backend.daemonErr = errors.New("sing-box check failed")
+	model = send(t, model, key("a"))
+	if view := plainView(model); !strings.Contains(view, "apply: sing-box check failed") || len(backend.sudo) != 0 {
+		t.Fatalf("view = %q, sudo %v; want the daemon error and no sudo fallback", view, backend.sudo)
+	}
+}
+
+func TestTUIGatewayShowsLiveAddress(t *testing.T) {
+	status := app.Status{GatewaySocks: "proxyhost.local:8080", GatewayLive: "192.0.2.10:8080"}
+	if got := gatewayAddress(status); got != "proxyhost.local:8080 → 192.0.2.10:8080" {
+		t.Fatalf("gatewayAddress() = %q", got)
+	}
+	status.GatewayLive = status.GatewaySocks
+	if got := gatewayAddress(status); got != "proxyhost.local:8080" {
+		t.Fatalf("gatewayAddress(same) = %q", got)
 	}
 }
 
@@ -395,7 +441,7 @@ func TestTUIRoutesLogsConnectionsAndHelpScreens(t *testing.T) {
 	}
 
 	model = send(t, model, key("?"))
-	if view := plainView(model); !strings.Contains(view, "run the same twarp binary under sudo") {
+	if view := plainView(model); !strings.Contains(view, "Root actions go through twarpd") || !strings.Contains(view, "runs the same twarp binary under sudo") {
 		t.Fatalf("help view = %q", view)
 	}
 }
@@ -513,6 +559,7 @@ func TestSudoCommandRefusesReplaceableBinary(t *testing.T) {
 
 func TestTUIRootActionReportsRefusedBinary(t *testing.T) {
 	backend := dashboardBackend()
+	backend.daemonErr = ipc.ErrDaemonUnavailable
 	backend.sudoErr = errors.New("refusing to run it under sudo: /home/alice/go/bin/twarp is owned by uid 501, not root")
 	model := send(t, initModel(t, backend), key("a"))
 	if view := plainView(model); !strings.Contains(view, "apply: refusing to run it under sudo") {

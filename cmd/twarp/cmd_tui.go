@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/tiptop32/twarp/internal/app"
 	"github.com/tiptop32/twarp/internal/fsutil"
+	"github.com/tiptop32/twarp/internal/ipc"
 	"github.com/tiptop32/twarp/internal/singbox"
 )
 
@@ -28,6 +30,8 @@ const (
 	// shorter timeout, and they run one after another.
 	tuiStatusTimeout = 20 * time.Second
 	tuiActionTimeout = 5 * time.Second
+	// tuiDaemonTimeout covers apply (sing-box check) and geo downloads.
+	tuiDaemonTimeout = 3 * time.Minute
 	tuiMaxWidth      = 84
 )
 
@@ -42,6 +46,9 @@ type tuiBackend interface {
 	AddGatewayCIDR(ctx context.Context, request app.AddGatewayRequest) (app.AddResult, error)
 	RemoveGatewayCIDR(ctx context.Context, cidr string) (app.RemoveResult, error)
 	Installed() bool
+	// Daemon runs a root operation through twarpd and returns its summary;
+	// ipc.ErrDaemonUnavailable falls back to SudoCommand.
+	Daemon(ctx context.Context, op string) (string, error)
 	// SudoCommand runs this twarp binary under sudo with args. Root actions are
 	// the only place the TUI starts a process: privileges cannot be raised in
 	// process, and the sudo'd binary runs the same app.Service.
@@ -50,9 +57,16 @@ type tuiBackend interface {
 
 type liveTUIBackend struct {
 	*app.Service
+	deps       cliDeps
 	executable string
 	// ownerUID is the owner a binary run under sudo must have; tests change it.
 	ownerUID int
+}
+
+// Daemon sends op to twarpd as the TUI actor.
+func (backend liveTUIBackend) Daemon(ctx context.Context, op string) (string, error) {
+	response, err := backend.deps.callDaemon(ctx, ipc.Request{Op: op, Actor: ipc.ActorTUI})
+	return response.Summary, err
 }
 
 // SudoCommand refuses a binary that this user could replace: sudo would run
@@ -67,7 +81,7 @@ func (backend liveTUIBackend) SudoCommand(args ...string) (*exec.Cmd, error) {
 
 func runTUI(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if deps.Sys.Geteuid() == 0 {
-		_, _ = fmt.Fprintln(stderr, "twarp tui: do not run tui with sudo; it asks for sudo only for start, stop, apply and geo update")
+		_, _ = fmt.Fprintln(stderr, "twarp tui: do not run tui with sudo; start, stop, apply and geo update go through twarpd (or sudo when it is not running)")
 		return 1
 	}
 	if len(args) != 0 {
@@ -100,7 +114,7 @@ func newLiveTUIBackend(deps cliDeps) (liveTUIBackend, error) {
 			executable = path
 		}
 	}
-	return liveTUIBackend{Service: service, executable: executable}, nil
+	return liveTUIBackend{Service: service, deps: deps, executable: executable}, nil
 }
 
 type tuiScreen int
@@ -154,6 +168,11 @@ type (
 		action string
 		output string
 		err    error
+	}
+	// sudoFallbackMsg: twarpd is not running, run the action under sudo.
+	sudoFallbackMsg struct {
+		action string
+		args   []string
 	}
 	fastTickMsg   struct{}
 	statusTickMsg struct{}
@@ -309,9 +328,24 @@ func installWarnings(backend tuiBackend, warnings []string) []string {
 	return append(warnings, app.NotInstalledWarning)
 }
 
-// runRoot suspends the TUI and runs a root action through sudo, so the password
+// runRoot runs a root action through twarpd without leaving the screen.
+// When twarpd is not running it falls back to runSudo.
+func (m tuiModel) runRoot(action, op string, args ...string) tea.Cmd {
+	backend := m.backend
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), tuiDaemonTimeout)
+		defer cancel()
+		summary, err := backend.Daemon(ctx, op)
+		if errors.Is(err, ipc.ErrDaemonUnavailable) {
+			return sudoFallbackMsg{action: action, args: args}
+		}
+		return actionDoneMsg{action: action, output: summary, err: err}
+	}
+}
+
+// runSudo suspends the TUI and runs a root action through sudo, so the password
 // prompt reaches the terminal. Output is captured and shown afterwards.
-func (m tuiModel) runRoot(action string, args ...string) tea.Cmd {
+func (m tuiModel) runSudo(action string, args ...string) tea.Cmd {
 	command, err := m.backend.SudoCommand(args...)
 	if err != nil {
 		return func() tea.Msg { return actionDoneMsg{action: action, err: err} }
@@ -355,6 +389,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setMessage(strings.Join(append([]string{msg.text}, prefixAll("warning: ", msg.warnings)...), "; "), false)
 		}
 		return m, tea.Batch(m.loadEntries(), m.loadRoutes())
+	case sudoFallbackMsg:
+		return m, m.runSudo(msg.action, msg.args...)
 	case actionDoneMsg:
 		text := msg.output
 		if text == "" {
@@ -456,9 +492,9 @@ func (m tuiModel) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.mode, m.stopPending = modeConfirmToggle, m.status.TunnelActive
 		return m, nil
 	case "a":
-		return m, m.runRoot("apply", "apply")
+		return m, m.runRoot("apply", ipc.OpApply, "apply")
 	case "u":
-		return m, m.runRoot("geo update", "geo", "update")
+		return m, m.runRoot("geo update", ipc.OpGeoUpdate, "geo", "update")
 	}
 	if m.screen != screenGateway {
 		return m, nil
@@ -498,9 +534,9 @@ func (m tuiModel) updateDialog(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, m.removeEntry(m.pendingCIDR)
 			}
 			if m.stopPending {
-				return m, m.runRoot("stop", "stop")
+				return m, m.runRoot("stop", ipc.OpDown, "stop")
 			}
-			return m, m.runRoot("start", "start")
+			return m, m.runRoot("start", ipc.OpUp, "start")
 		case "n", "N", "esc", "q", "enter":
 			m.mode = modeBrowse
 		}
@@ -732,7 +768,7 @@ func (m tuiModel) viewTraffic() string {
 		vpnState = levelStyle(m.egress.check.Level).Render(string(m.egress.check.Level))
 	}
 	rows := [][]string{
-		{app.OutboundGateway, m.status.GatewaySocks, gatewayState, conns(app.OutboundGateway)},
+		{app.OutboundGateway, gatewayAddress(m.status), gatewayState, conns(app.OutboundGateway)},
 		{app.OutboundDirect, styleDim.Render("no probe"), "", conns(app.OutboundDirect)},
 		{app.OutboundVPN, vpnTarget, vpnState, conns(app.OutboundVPN)},
 	}
@@ -863,15 +899,16 @@ func viewHelp() string {
 		{"c", "active connections by outbound"},
 		{"n", "check egress through the vpn (contacts ifconfig.me)"},
 		{"R", "refresh everything"},
-		{"s", "start or stop the tunnel (sudo)"},
-		{"a", "apply twarp.yaml and secrets.yaml (sudo)"},
-		{"u", "update geo rule-sets (sudo)"},
+		{"s", "start or stop the tunnel"},
+		{"a", "apply twarp.yaml and secrets.yaml"},
+		{"u", "update geo rule-sets"},
 		{"esc", "back to the dashboard"},
 		{"q", "quit"},
 	}
 	lines := formatTable(nil, rows)
 	return strings.Join(append(lines, "",
-		styleDim.Render("Root actions suspend the TUI and run the same twarp binary under sudo."),
+		styleDim.Render("Root actions go through twarpd. When it is not running, the TUI"),
+		styleDim.Render("suspends and runs the same twarp binary under sudo."),
 		styleDim.Render("Gateway changes apply without restarting sing-box.")), "\n")
 }
 
@@ -885,9 +922,9 @@ func (m tuiModel) viewFooter() string {
 		return styleWarn.Render(fmt.Sprintf("remove %s? [y/N]", m.pendingCIDR))
 	case modeConfirmToggle:
 		if m.stopPending {
-			return styleWarn.Render("stop the tunnel and disable autostart? sudo twarp stop [y/N]")
+			return styleWarn.Render("stop the tunnel and disable autostart? twarp down [y/N]")
 		}
-		return styleWarn.Render("start the tunnel? sudo twarp start [y/N]")
+		return styleWarn.Render("start the tunnel? twarp up [y/N]")
 	}
 	if m.message == "" {
 		return ""
@@ -1005,4 +1042,13 @@ func prefixAll(prefix string, values []string) []string {
 		out[index] = prefix + value
 	}
 	return out
+}
+
+// gatewayAddress shows gateway.socks, plus the live address when sing-box
+// runs on a different one (a host name, or a stale config).
+func gatewayAddress(status app.Status) string {
+	if status.GatewayLive == "" || status.GatewayLive == status.GatewaySocks {
+		return status.GatewaySocks
+	}
+	return status.GatewaySocks + " → " + status.GatewayLive
 }

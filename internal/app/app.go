@@ -16,6 +16,7 @@ import (
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/ipc"
 	"github.com/tiptop32/twarp/internal/launchd"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
@@ -59,6 +60,9 @@ type Deps struct {
 	// GeoOptions overrides download settings; Dir and AuditFile are always set
 	// by GeoUpdate.
 	GeoOptions geo.Options
+	// Daemon asks twarpd what config it runs. Nil, or an unavailable daemon,
+	// falls back to reading config.json (root) or its mtime (users).
+	Daemon func(context.Context) (*ipc.LiveStatus, error)
 }
 
 // Service implements twarp operations for one front end, identified by actor

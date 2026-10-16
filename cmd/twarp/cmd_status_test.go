@@ -16,6 +16,7 @@ import (
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/geo"
+	"github.com/tiptop32/twarp/internal/ipc"
 	"github.com/tiptop32/twarp/internal/socksprobe"
 	"github.com/tiptop32/twarp/internal/sysexec"
 )
@@ -387,5 +388,33 @@ func TestRunStatusRejectsNonSOCKSGateway(t *testing.T) {
 	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
 	if code != 1 || !strings.Contains(stdout, "FAIL gateway: 192.0.2.10:1080: not a SOCKS5 server") {
 		t.Fatalf("status = (%d, %q), want SOCKS failure", code, stdout)
+	}
+}
+
+// The 2026-10-16 case end to end: the daemon reports the address sing-box
+// runs on, and status must not call a stale twarp.yaml OK.
+func TestRunStatusUsesTheDaemonsLiveAddress(t *testing.T) {
+	fixture := newStatusFixture(t, http.StatusOK)
+	var dialed string
+	fixture.deps.Dial = func(_ context.Context, _, address string) (net.Conn, error) {
+		dialed = address
+		return socksprobe.FakeServer{}.Dial(), nil
+	}
+	daemon := &fakeDaemon{live: &ipc.LiveStatus{GatewayConfigured: "192.0.2.10:1080", GatewayLive: "192.0.2.105:1080", Stale: true}}
+	fixture.deps.IPC = daemon.call
+	stdout, _, code := runCLIForTest([]string{"status"}, fixture.deps)
+	if code != 0 {
+		t.Fatalf("status exit = %d, want warnings only\n%s", code, stdout)
+	}
+	for _, want := range []string{
+		"WARN gateway: sing-box runs on 192.0.2.105:1080, but twarp.yaml has 192.0.2.10:1080; run: twarp apply",
+		"WARN config: twarp.yaml or secrets.yaml changed after the last apply; run: twarp apply",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout = %q, want %q", stdout, want)
+		}
+	}
+	if strings.Contains(stdout, "OK   gateway:") || dialed != "192.0.2.105:1080" || daemon.ops() != "status" {
+		t.Fatalf("status must probe the live address and not report OK; dialed %q, ops %q\n%s", dialed, daemon.ops(), stdout)
 	}
 }

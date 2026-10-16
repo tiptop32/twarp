@@ -21,12 +21,25 @@ const (
 	daemonKickstartHint = "sudo launchctl kickstart system/dev.twarp.daemon"
 )
 
-// callDaemon sends one request to twarpd; tests replace deps.IPC.
+// callDaemon sends one request to twarpd. deps.IPC is set by
+// defaultCLIDeps; nil (tests) means no daemon, so tests never reach a real
+// twarpd on the host.
 func (deps cliDeps) callDaemon(ctx context.Context, request ipc.Request) (ipc.Response, error) {
-	if deps.IPC != nil {
-		return deps.IPC(ctx, request)
+	if deps.IPC == nil {
+		return ipc.Response{}, ipc.ErrDaemonUnavailable
 	}
-	return ipc.Call(ctx, ipc.SocketPath(deps.Sys.Getenv), request)
+	return deps.IPC(ctx, request)
+}
+
+// daemonLive is app.Deps.Daemon: what twarpd runs on, for status.
+func (deps cliDeps) daemonLive(ctx context.Context) (*ipc.LiveStatus, error) {
+	ctx, cancel := context.WithTimeout(ctx, daemonStatusTimeout)
+	defer cancel()
+	response, err := deps.callDaemon(ctx, ipc.Request{Op: ipc.OpStatus, Actor: ipc.ActorCLI})
+	if err != nil {
+		return nil, err
+	}
+	return response.Live, nil
 }
 
 // runViaDaemon runs a root operation through twarpd for a non-root user, so
