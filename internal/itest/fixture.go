@@ -31,6 +31,10 @@ type renderedFixture struct {
 }
 
 func newRenderedFixture(t *testing.T) *renderedFixture {
+	return newRenderedFixtureWithVPNProxy(t, 0)
+}
+
+func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int) *renderedFixture {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -64,6 +68,7 @@ func newRenderedFixture(t *testing.T) *renderedFixture {
 		LogLevel: "debug",
 	}
 	secrets := syntheticSecrets(t, clashSecret)
+	cfg.VPNProxy = uint16(vpnProxyPort)
 	configJSON, err := render.Render(cfg, secrets, nil, render.Options{
 		Paths:     config.Paths{Out: out},
 		Inbound:   render.InboundMixed,

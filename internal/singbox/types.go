@@ -105,6 +105,8 @@ type RouteRule struct {
 	RuleSet      []string `json:"rule_set,omitempty"`
 	IPIsPrivate  bool     `json:"ip_is_private,omitempty"`
 	Outbound     string   `json:"outbound,omitempty"`
+
+	Inbound []string `json:"inbound,omitempty"`
 }
 
 // RuleSet points sing-box at a local source or binary rule-set.

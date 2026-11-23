@@ -22,6 +22,7 @@ const (
 	InboundTUN = "tun"
 	// InboundMixed selects the local mixed inbound used by tests and diagnostics.
 	InboundMixed = "mixed"
+	vpnProxyTag  = "vpn-proxy-in"
 )
 
 // TUNDNS is the peer address of the TUN subnet. Port 53 traffic routed into
@@ -89,9 +90,18 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 		}
 	}
 
+	var inbounds []singbox.Inbound
+	if cfg.VPNProxy == 0 {
+		inbounds = []singbox.Inbound{inbound}
+	} else {
+		inbounds = []singbox.Inbound{inbound, {
+			Type: "mixed", Tag: vpnProxyTag, Listen: "127.0.0.1", ListenPort: cfg.VPNProxy,
+		}}
+	}
+
 	generated := singbox.Config{
 		Log:       singbox.Log{Level: cfg.LogLevel},
-		Inbounds:  []singbox.Inbound{inbound},
+		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		DNS: singbox.DNS{
 			Servers: []singbox.DNSServer{
@@ -157,14 +167,20 @@ func RouteRules(cfg config.Config, gatewaySocks netip.AddrPort) ([]singbox.Route
 // routeRules keeps the gateway rules ahead of ip_is_private: gateway hosts in
 // RFC1918 ranges would otherwise go direct. Unmatched traffic goes to the vpn.
 func routeRules(cfg config.Config, socksPrefix string) []singbox.RouteRule {
-	rules := []singbox.RouteRule{
-		{Action: "sniff"},
-		{Protocol: "dns", Action: "hijack-dns"},
-		{IPCIDR: []string{socksPrefix}, Outbound: "direct"},
-		{DomainSuffix: cfg.Gateway.Domains, Outbound: "gateway"},
-		{RuleSet: []string{"gateway-ip"}, Outbound: "gateway"},
-		{IPIsPrivate: true, Outbound: "direct"},
+	// Start with the dedicated listener when configured; it must win over
+	// split-routing, including the DNS hijack on the TUN.
+	rules := make([]singbox.RouteRule, 0, 13)
+	if cfg.VPNProxy != 0 {
+		rules = append(rules, singbox.RouteRule{Inbound: []string{vpnProxyTag}, Outbound: "vpn"})
 	}
+	rules = append(rules,
+		singbox.RouteRule{Action: "sniff"},
+		singbox.RouteRule{Protocol: "dns", Action: "hijack-dns"},
+		singbox.RouteRule{IPCIDR: []string{socksPrefix}, Outbound: "direct"},
+		singbox.RouteRule{DomainSuffix: cfg.Gateway.Domains, Outbound: "gateway"},
+		singbox.RouteRule{RuleSet: []string{"gateway-ip"}, Outbound: "gateway"},
+		singbox.RouteRule{IPIsPrivate: true, Outbound: "direct"},
+	)
 	if len(cfg.Direct.LocalDomains) > 0 {
 		rules = append(rules, singbox.RouteRule{DomainSuffix: cfg.Direct.LocalDomains, Outbound: "direct"})
 	}

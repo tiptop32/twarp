@@ -40,6 +40,7 @@ type Config struct {
 	VPN      VPNConfig
 	ClashAPI string
 	LogLevel string
+	VPNProxy uint16
 }
 
 // GatewayConfig configures access to gateway resources.
@@ -107,6 +108,7 @@ type rawConfig struct {
 	} `yaml:"vpn"`
 	ClashAPI string `yaml:"clash_api"`
 	LogLevel string `yaml:"log_level"`
+	VPNProxy uint16 `yaml:"vpn_proxy_port"`
 }
 
 // Load reads, defaults, normalizes, and validates twarp.yaml.
@@ -274,6 +276,12 @@ func validateConfig(raw rawConfig) (Config, error) {
 	if _, ok := validLogLevels[raw.LogLevel]; !ok {
 		return Config{}, errors.New("log_level must be one of trace, debug, info, warn, error")
 	}
+	if raw.VPNProxy != 0 {
+		_, clashPort, _ := net.SplitHostPort(raw.ClashAPI)
+		if port, _ := strconv.ParseUint(clashPort, 10, 16); uint16(port) == raw.VPNProxy {
+			return Config{}, errors.New("vpn_proxy_port must differ from the clash_api port")
+		}
+	}
 
 	return Config{
 		Gateway: GatewayConfig{
@@ -286,6 +294,7 @@ func validateConfig(raw rawConfig) (Config, error) {
 		VPN:      VPNConfig{DNS: raw.VPN.DNS},
 		ClashAPI: raw.ClashAPI,
 		LogLevel: raw.LogLevel,
+		VPNProxy: raw.VPNProxy,
 	}, nil
 }
 
