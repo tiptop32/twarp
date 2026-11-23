@@ -208,6 +208,11 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		release()
 		return "", s.failApply(fmt.Errorf("read installed sing-box config: %w", configReadErr))
 	}
+	reusingProxyPort, err := singbox.CheckVPNProxyPort(ctx, s.deps.Runner, cfg.VPNProxy, previousConfig)
+	if err != nil {
+		release()
+		return "", s.failApply(err)
+	}
 	restoreRuleSet := func() error {
 		return s.restoreApplyRuleSet(ruleSetPath, previousRuleSet, readErr == nil, uid, gid)
 	}
@@ -277,6 +282,15 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		result = "reloaded"
 	} else if err := sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget()); err != nil {
 		return failAfterPromotion(fmt.Errorf("kickstart sing-box: %w", err), false)
+	}
+	if !reusingProxyPort {
+		if err := singbox.WaitVPNProxy(ctx, s.deps.Runner, cfg.VPNProxy); err != nil {
+			_, failure := failAfterPromotion(err, false)
+			if recoveryErr := sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget()); recoveryErr != nil {
+				failure = errors.Join(failure, fmt.Errorf("restart restored sing-box config: %w", recoveryErr))
+			}
+			return "", failure
+		}
 	}
 	release()
 	note, resolverErr := s.SyncResolvers(ctx, cfg.Gateway.Domains)

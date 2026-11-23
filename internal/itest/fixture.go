@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -31,10 +30,10 @@ type renderedFixture struct {
 }
 
 func newRenderedFixture(t *testing.T) *renderedFixture {
-	return newRenderedFixtureWithVPNProxy(t, 0)
+	return newRenderedFixtureWithVPNProxy(t, 0, "")
 }
 
-func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int) *renderedFixture {
+func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int, extraYAML string) *renderedFixture {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -55,20 +54,22 @@ func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int) *renderedFix
 	mixedPort := freePort(t)
 	clashPort := freePort(t)
 	const clashSecret = "twarp-flow-itest"
-	cfg := config.Config{
-		Gateway: config.GatewayConfig{
-			Socks:         netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(gateway.Port())).String(),
-			Domains:       []string{"intra.example"},
-			DNS:           "127.0.0.1",
-			AllowedRanges: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")},
-		},
-		Direct:   config.DirectConfig{DNS: "127.0.0.1"},
-		VPN:      config.VPNConfig{DNS: "https://127.0.0.1/dns-query"},
-		ClashAPI: netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(clashPort)).String(),
-		LogLevel: "debug",
+	configYAML := fmt.Sprintf(
+		"gateway:\n  socks: 127.0.0.1:%d\n  domains: [intra.example]\n  dns: 127.0.0.1\n  allowed_ranges: [100.64.0.0/10]\ndirect:\n  dns: 127.0.0.1\nvpn:\n  dns: https://127.0.0.1/dns-query\nclash_api: 127.0.0.1:%d\nlog_level: debug\n",
+		gateway.Port(), clashPort,
+	)
+	if vpnProxyPort != 0 {
+		configYAML += fmt.Sprintf("vpn_proxy_port: %d\n", vpnProxyPort)
+	}
+	configYAML += extraYAML
+	if err := os.WriteFile(filepath.Join(home, "twarp.yaml"), []byte(configYAML), 0o600); err != nil {
+		t.Fatalf("write twarp config: %v", err)
+	}
+	cfg, err := config.Load(filepath.Join(home, "twarp.yaml"))
+	if err != nil {
+		t.Fatalf("load twarp config: %v", err)
 	}
 	secrets := syntheticSecrets(t, clashSecret)
-	cfg.VPNProxy = uint16(vpnProxyPort)
 	configJSON, err := render.Render(cfg, secrets, nil, render.Options{
 		Paths:     config.Paths{Out: out},
 		Inbound:   render.InboundMixed,
@@ -86,13 +87,6 @@ func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int) *renderedFix
 		t.Fatalf("write flow config: %v", err)
 	}
 
-	configYAML := fmt.Sprintf(
-		"gateway:\n  socks: 127.0.0.1:%d\n  domains: [intra.example]\n  dns: 127.0.0.1\n  allowed_ranges: [100.64.0.0/10]\ndirect:\n  dns: 127.0.0.1\nvpn:\n  dns: https://127.0.0.1/dns-query\nclash_api: 127.0.0.1:%d\nlog_level: debug\n",
-		gateway.Port(), clashPort,
-	)
-	if err := os.WriteFile(filepath.Join(home, "twarp.yaml"), []byte(configYAML), 0o600); err != nil {
-		t.Fatalf("write twarp config: %v", err)
-	}
 	if err := config.SaveSecrets(filepath.Join(home, "secrets.yaml"), secrets); err != nil {
 		t.Fatalf("write twarp secrets: %v", err)
 	}

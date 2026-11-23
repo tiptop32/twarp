@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -41,6 +42,9 @@ type Config struct {
 	ClashAPI string
 	LogLevel string
 	VPNProxy uint16
+
+	VPNProxyTLSCert string
+	VPNProxyTLSKey  string
 }
 
 // GatewayConfig configures access to gateway resources.
@@ -106,9 +110,12 @@ type rawConfig struct {
 	VPN struct {
 		DNS string `yaml:"dns"`
 	} `yaml:"vpn"`
-	ClashAPI string `yaml:"clash_api"`
-	LogLevel string `yaml:"log_level"`
-	VPNProxy uint16 `yaml:"vpn_proxy_port"`
+	ClashAPI string    `yaml:"clash_api"`
+	LogLevel string    `yaml:"log_level"`
+	VPNProxy yaml.Node `yaml:"vpn_proxy_port"`
+
+	VPNProxyTLSCert string `yaml:"vpn_proxy_tls_cert"`
+	VPNProxyTLSKey  string `yaml:"vpn_proxy_tls_key"`
 }
 
 // Load reads, defaults, normalizes, and validates twarp.yaml.
@@ -276,10 +283,27 @@ func validateConfig(raw rawConfig) (Config, error) {
 	if _, ok := validLogLevels[raw.LogLevel]; !ok {
 		return Config{}, errors.New("log_level must be one of trace, debug, info, warn, error")
 	}
-	if raw.VPNProxy != 0 {
+	var vpnProxyPort uint16
+	if raw.VPNProxy.Kind != 0 {
+		if raw.VPNProxy.Kind != yaml.ScalarNode || raw.VPNProxy.ShortTag() != "!!int" || raw.VPNProxy.Decode(&vpnProxyPort) != nil {
+			return Config{}, errors.New("vpn_proxy_port must be an integer from 0 to 65535")
+		}
+	}
+	if vpnProxyPort != 0 {
 		_, clashPort, _ := net.SplitHostPort(raw.ClashAPI)
-		if port, _ := strconv.ParseUint(clashPort, 10, 16); uint16(port) == raw.VPNProxy {
+		if port, _ := strconv.ParseUint(clashPort, 10, 16); uint16(port) == vpnProxyPort {
 			return Config{}, errors.New("vpn_proxy_port must differ from the clash_api port")
+		}
+	}
+	if (raw.VPNProxyTLSCert == "") != (raw.VPNProxyTLSKey == "") {
+		return Config{}, errors.New("vpn_proxy_tls_cert and vpn_proxy_tls_key must be set together")
+	}
+	if raw.VPNProxyTLSCert != "" {
+		if vpnProxyPort == 0 {
+			return Config{}, errors.New("VPN proxy TLS requires vpn_proxy_port")
+		}
+		if !filepath.IsAbs(raw.VPNProxyTLSCert) || !filepath.IsAbs(raw.VPNProxyTLSKey) {
+			return Config{}, errors.New("vpn_proxy_tls_cert and vpn_proxy_tls_key must be absolute paths")
 		}
 	}
 
@@ -294,7 +318,10 @@ func validateConfig(raw rawConfig) (Config, error) {
 		VPN:      VPNConfig{DNS: raw.VPN.DNS},
 		ClashAPI: raw.ClashAPI,
 		LogLevel: raw.LogLevel,
-		VPNProxy: raw.VPNProxy,
+		VPNProxy: vpnProxyPort,
+
+		VPNProxyTLSCert: raw.VPNProxyTLSCert,
+		VPNProxyTLSKey:  raw.VPNProxyTLSKey,
 	}, nil
 }
 

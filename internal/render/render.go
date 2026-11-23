@@ -22,7 +22,6 @@ const (
 	InboundTUN = "tun"
 	// InboundMixed selects the local mixed inbound used by tests and diagnostics.
 	InboundMixed = "mixed"
-	vpnProxyTag  = "vpn-proxy-in"
 )
 
 // TUNDNS is the peer address of the TUN subnet. Port 53 traffic routed into
@@ -94,9 +93,15 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 	if cfg.VPNProxy == 0 {
 		inbounds = []singbox.Inbound{inbound}
 	} else {
-		inbounds = []singbox.Inbound{inbound, {
-			Type: "mixed", Tag: vpnProxyTag, Listen: "127.0.0.1", ListenPort: cfg.VPNProxy,
-		}}
+		if socks.Addr().Unmap().String() == singbox.VPNProxyListen && socks.Port() == cfg.VPNProxy {
+			return nil, errors.New("vpn_proxy_port conflicts with the resolved gateway SOCKS endpoint")
+		}
+		proxy := singbox.Inbound{Type: "mixed", Tag: singbox.VPNProxyTag, Listen: singbox.VPNProxyListen, ListenPort: cfg.VPNProxy}
+		if cfg.VPNProxyTLSCert != "" {
+			proxy.Type = "http"
+			proxy.TLS = &singbox.InboundTLS{Enabled: true, CertificatePath: cfg.VPNProxyTLSCert, KeyPath: cfg.VPNProxyTLSKey}
+		}
+		inbounds = []singbox.Inbound{inbound, proxy}
 	}
 
 	generated := singbox.Config{
@@ -169,9 +174,9 @@ func RouteRules(cfg config.Config, gatewaySocks netip.AddrPort) ([]singbox.Route
 func routeRules(cfg config.Config, socksPrefix string) []singbox.RouteRule {
 	// Start with the dedicated listener when configured; it must win over
 	// split-routing, including the DNS hijack on the TUN.
-	rules := make([]singbox.RouteRule, 0, 13)
+	rules := make([]singbox.RouteRule, 0, 10)
 	if cfg.VPNProxy != 0 {
-		rules = append(rules, singbox.RouteRule{Inbound: []string{vpnProxyTag}, Outbound: "vpn"})
+		rules = append(rules, singbox.RouteRule{Inbound: []string{singbox.VPNProxyTag}, Outbound: "vpn"})
 	}
 	rules = append(rules,
 		singbox.RouteRule{Action: "sniff"},

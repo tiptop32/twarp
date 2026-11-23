@@ -117,6 +117,8 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 		{name: "VPN DNS without host", yaml: validConfig() + "vpn:\n  dns: https:///dns-query\n", wantError: "vpn.dns must be an https:// URL"},
 		{name: "clash API without host", yaml: validConfig() + "clash_api: \"9090\"\n", wantError: "clash_api must be host:port"},
 		{name: "VPN proxy conflicts with Clash API", yaml: validConfig() + "vpn_proxy_port: 9090\n", wantError: "vpn_proxy_port must differ from the clash_api port"},
+		{name: "VPN proxy fractional port", yaml: validConfig() + "vpn_proxy_port: 891.5\n", wantError: "vpn_proxy_port must be an integer"},
+		{name: "VPN proxy TLS without key", yaml: validConfig() + "vpn_proxy_port: 891\nvpn_proxy_tls_cert: /etc/twarp/example.pem\n", wantError: "vpn_proxy_tls_cert and vpn_proxy_tls_key must be set together"},
 	}
 
 	for _, test := range tests {

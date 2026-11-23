@@ -2,4 +2,4 @@
 (allow default)
 (deny network-outbound)
 (allow network-outbound
-    (remote ip (string-append "localhost:" (param "PROXY_PORT"))))
+    (remote tcp (string-append "localhost:" (param "PROXY_PORT"))))

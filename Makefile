@@ -1,7 +1,9 @@
-.PHONY: build install uninstall-bin test integration eval eval-config-deployment eval-launchd-geo lint secrets-check
+.PHONY: build install uninstall-bin test integration eval eval-config-deployment eval-launchd-geo eval-vpn-proxy eval-agent-lb-vpn-proxy lint secrets-check
 
 GEO_EVAL_SCRIPT := ./evals/launchd_geo/run.sh
 EVAL_SCRIPTS := ./evals/config_deployment/run.sh ./evals/gateway_state_recovery/run.sh ./evals/lifecycle/run.sh ./evals/mcp_tool_choice/run.sh ./evals/status/run.sh
+VPN_PROXY_EVAL_SCRIPT := ./evals/vpn_proxy/run.sh
+EVAL_SCRIPTS += $(VPN_PROXY_EVAL_SCRIPT)
 PREFIX ?= /usr/local
 
 build:
@@ -42,6 +44,12 @@ eval-launchd-geo:
 
 eval-config-deployment:
 	./evals/config_deployment/run.sh
+
+eval-vpn-proxy:
+	$(VPN_PROXY_EVAL_SCRIPT)
+
+eval-agent-lb-vpn-proxy:
+	python3 evals/vpn_proxy/agent_lb.py "$(AGENT_LB_REPO)"
 
 lint:
 	golangci-lint run --build-tags integration ./...
