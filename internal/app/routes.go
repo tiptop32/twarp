@@ -108,6 +108,8 @@ func vpnProtocol(outbound singbox.Outbound) string {
 func describeRule(rule singbox.RouteRule, gatewayCIDRs int) RouteRule {
 	described := RouteRule{Outbound: rule.Outbound}
 	switch {
+	case len(rule.Inbound) > 0:
+		described.Match = "inbound " + strings.Join(rule.Inbound, ", ")
 	case rule.Action == "sniff":
 		described.Action, described.Match = "sniff", "detect protocol and domain"
 	case rule.Action == "hijack-dns":

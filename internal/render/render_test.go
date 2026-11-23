@@ -38,6 +38,21 @@ func TestRenderMatchesGolden(t *testing.T) {
 	assertGolden(t, filepath.Join("testdata", "golden", "config.json"), got)
 }
 
+func TestRenderRejectsVPNProxyAliasingResolvedGateway(t *testing.T) {
+	out := t.TempDir()
+	createGeoPlaceholders(t, out)
+	cfg := testConfig()
+	cfg.Gateway.Socks = "gateway.example:891"
+	cfg.VPNProxy = 891
+	data, err := render.Render(cfg, testSecrets(t), nil, render.Options{
+		Paths: config.Paths{Out: out}, Inbound: render.InboundTUN,
+		GatewaySocks: netip.MustParseAddrPort("127.0.0.1:891"),
+	})
+	if data != nil || err == nil || !strings.Contains(err.Error(), "conflicts with the resolved gateway SOCKS endpoint") {
+		t.Fatalf("Render() produced %d bytes and error %v; want gateway collision", len(data), err)
+	}
+}
+
 func TestRenderConfigContract(t *testing.T) {
 	out := t.TempDir()
 	createGeoPlaceholders(t, out)

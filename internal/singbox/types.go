@@ -16,14 +16,22 @@ type Log struct {
 	Level string `json:"level"`
 }
 
-// Inbound describes a sing-box TUN or mixed inbound.
+// Inbound describes a sing-box TUN, mixed or HTTP inbound.
 type Inbound struct {
-	Type       string   `json:"type"`
-	Tag        string   `json:"tag"`
-	Address    []string `json:"address,omitempty"`
-	AutoRoute  bool     `json:"auto_route,omitempty"`
-	Listen     string   `json:"listen,omitempty"`
-	ListenPort uint16   `json:"listen_port,omitempty"`
+	Type       string      `json:"type"`
+	Tag        string      `json:"tag"`
+	Address    []string    `json:"address,omitempty"`
+	AutoRoute  bool        `json:"auto_route,omitempty"`
+	Listen     string      `json:"listen,omitempty"`
+	ListenPort uint16      `json:"listen_port,omitempty"`
+	TLS        *InboundTLS `json:"tls,omitempty"`
+}
+
+// InboundTLS configures the HTTPS proxy's server certificate.
+type InboundTLS struct {
+	Enabled         bool   `json:"enabled"`
+	CertificatePath string `json:"certificate_path"`
+	KeyPath         string `json:"key_path"`
 }
 
 // Outbound describes a sing-box outbound connection.
@@ -105,6 +113,8 @@ type RouteRule struct {
 	RuleSet      []string `json:"rule_set,omitempty"`
 	IPIsPrivate  bool     `json:"ip_is_private,omitempty"`
 	Outbound     string   `json:"outbound,omitempty"`
+
+	Inbound []string `json:"inbound,omitempty"`
 }
 
 // RuleSet points sing-box at a local source or binary rule-set.

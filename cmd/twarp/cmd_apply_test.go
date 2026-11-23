@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -77,6 +78,39 @@ func TestRunApplyChecksAndReloadsRunningService(t *testing.T) {
 		if !strings.Contains(string(audit), want) {
 			t.Errorf("audit = %s, want %s", audit, want)
 		}
+	}
+}
+
+func TestRunApplyRejectsOccupiedVPNProxyPort(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 0)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	path := filepath.Join(fixture.home, "twarp.yaml")
+	configYAML, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configYAML = fmt.Appendf(configYAML, "\nvpn_proxy_port: %d\n", listener.Addr().(*net.TCPAddr).Port)
+	if err := os.WriteFile(path, configYAML, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installedPath := filepath.Join(fixture.out, "config.json")
+	const installed = `{"inbounds":[{"type":"tun","tag":"tun-in"}]}`
+	if err := os.WriteFile(installedPath, []byte(installed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.deps.Runner = &sysexec.Fake{}
+	fixture.deps.FS = &cliFakeFS{}
+	stdout, stderr, code := runCLIForTest([]string{"apply"}, fixture.deps)
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "cannot bind vpn_proxy_port") {
+		t.Fatalf("apply = (%d, %q, %q), want occupied VPN proxy port error", code, stdout, stderr)
+	}
+	got, err := os.ReadFile(installedPath)
+	if err != nil || string(got) != installed {
+		t.Fatalf("config after rejected apply = %q, error = %v, want %q", got, err, installed)
 	}
 }
 

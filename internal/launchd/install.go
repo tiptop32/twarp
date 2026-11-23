@@ -179,6 +179,9 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	if configReadErr != nil && !errors.Is(configReadErr, os.ErrNotExist) {
 		return fmt.Errorf("read installed sing-box config: %w", configReadErr)
 	}
+	if _, err := singbox.CheckVPNProxyPort(ctx, deps.Runner, options.Config.VPNProxy, previousConfig); err != nil {
+		return err
+	}
 	restoreRuleSet := func(cause error) error {
 		var restoreErr error
 		if readErr == nil {
@@ -266,6 +269,18 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	}
 	if err := sysexec.Bootstrap(ctx, deps.Runner, "system", SingBoxPlistPath); err != nil {
 		return failAfterPromotion(fmt.Errorf("load sing-box service: %w", err))
+	}
+	if err := singbox.WaitVPNProxy(ctx, deps.Runner, options.Config.VPNProxy); err != nil {
+		failure := failAfterPromotion(err)
+		if bootoutErr := sysexec.Bootout(ctx, deps.Runner, sysexec.SystemTarget()); bootoutErr != nil {
+			return errors.Join(failure, fmt.Errorf("unload failed sing-box config: %w", bootoutErr))
+		}
+		if configReadErr == nil {
+			if reloadErr := sysexec.Bootstrap(ctx, deps.Runner, "system", SingBoxPlistPath); reloadErr != nil {
+				return errors.Join(failure, fmt.Errorf("load restored sing-box config: %w", reloadErr))
+			}
+		}
+		return failure
 	}
 	releaseState()
 	releaseState = func() {}
