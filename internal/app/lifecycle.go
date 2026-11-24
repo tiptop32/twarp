@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
@@ -302,7 +303,9 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 	}
 	if err := singbox.WaitLoopbackPorts(ctx, s.deps.Runner, sysexec.SystemTarget(), newListeners); err != nil {
 		_, failure := failAfterPromotion(err, false)
-		if recoveryErr := sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget()); recoveryErr != nil {
+		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if recoveryErr := sysexec.Kickstart(recovery, s.deps.Runner, sysexec.SystemTarget()); recoveryErr != nil {
 			failure = errors.Join(failure, fmt.Errorf("restart restored sing-box config: %w", recoveryErr))
 		}
 		return "", failure

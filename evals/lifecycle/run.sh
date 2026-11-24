@@ -26,6 +26,7 @@ scenarios=(
   "start loads and restarts services:TestRunStartLoadsUnloadedService|TestRunStartRestartsLoadedButInactiveService"
   "apply keeps stopped service stopped:TestRunApplyKeepsDisabledServiceStopped"
   "apply rejects uninstalled service:TestRunApplyRejectsUninstalledService"
+  "apply cancellation restarts restored config:TestApplyCancellationRestartsRestoredConfig"
   "install re-enables before bootstrap:TestInstallPerformsSystemSetupInOrder"
 )
 
