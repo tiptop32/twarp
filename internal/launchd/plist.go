@@ -129,6 +129,29 @@ func DaemonPlist(executable, out string, owner Owner) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+// XrayPlist renders an independent login agent for an additional tunnel.
+func XrayPlist(label, executable, configPath, logPath string) ([]byte, error) {
+	if !filepath.IsAbs(executable) || !filepath.IsAbs(configPath) || !filepath.IsAbs(logPath) {
+		return nil, errors.New("paths for the Xray executable, config and log must be absolute")
+	}
+	var output bytes.Buffer
+	output.WriteString(plistHeader)
+	writeKeyString(&output, "Label", label, 2)
+	output.WriteString("  <key>ProgramArguments</key>\n  <array>\n")
+	for _, argument := range []string{executable, "run", "-c", configPath, "-format", "json"} {
+		writeString(&output, argument, 4)
+	}
+	output.WriteString("  </array>\n  <key>EnvironmentVariables</key>\n  <dict>\n")
+	// Xray otherwise merges a configuration directory from the environment
+	// even when -c is specified. The dotted key takes precedence over aliases.
+	writeKeyString(&output, "xray.location.confdir", "/dev/null", 4)
+	output.WriteString("  </dict>\n  <key>KeepAlive</key>\n  <true/>\n  <key>ThrottleInterval</key>\n  <integer>30</integer>\n")
+	writeKeyString(&output, "StandardOutPath", logPath, 2)
+	writeKeyString(&output, "StandardErrorPath", logPath, 2)
+	output.WriteString("</dict>\n</plist>\n")
+	return output.Bytes(), nil
+}
+
 // NewsyslogConfig returns twarp's log rotation rules.
 func NewsyslogConfig() []byte {
 	return []byte("/usr/local/var/log/twarp/sing-box.log 644 5 1024 * NJ\n" +

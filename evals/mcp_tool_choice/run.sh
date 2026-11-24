@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 CASES_FILE="$SCRIPT_DIR/cases.json"
-ALLOWED_TOOLS="mcp__twarp__gateway_ip_add,mcp__twarp__gateway_ip_remove,mcp__twarp__gateway_ip_list"
 TIMEOUT_SECONDS=180
 DRY_RUN=false
 CASE_ID=""
@@ -44,8 +43,8 @@ for dependency in go python3 perl; do
     exit 1
   fi
 done
-if [[ $DRY_RUN == false ]] && ! command -v claude >/dev/null 2>&1; then
-  echo "eval: missing required command: claude" >&2
+if [[ $DRY_RUN == false ]] && ! command -v omp >/dev/null 2>&1; then
+  echo "eval: missing required command: omp" >&2
   exit 1
 fi
 
@@ -54,6 +53,64 @@ trap 'rm -R -- "$WORK"' EXIT
 TWARP_BIN="$WORK/twarp"
 CASE_ROWS="$WORK/cases.tsv"
 RESULTS_FILE="$WORK/results.jsonl"
+agent_source=""
+if [[ $DRY_RUN == false ]]; then
+  agent_source="$(omp config path)"
+fi
+agent_dir="$WORK/agent"
+mkdir -m 700 "$agent_dir"
+for config_name in config.yml config.yaml; do
+  if [[ -n $agent_source && -f "$agent_source/$config_name" ]]; then
+    ln -s "$agent_source/$config_name" "$agent_dir/$config_name"
+  fi
+done
+for models_name in models.yml models.yaml; do
+  if [[ -n $agent_source && -f "$agent_source/$models_name" ]]; then
+    if [[ -z ${AGENT_LB_API_KEY:-} ]]; then
+      echo "eval: set AGENT_LB_API_KEY for the isolated agent-lb model" >&2
+      exit 1
+    fi
+    if ! command -v bun >/dev/null 2>&1; then
+      echo "eval: bun is required to isolate the model configuration" >&2
+      exit 1
+    fi
+    (umask 077; bun -e '
+      const config = Bun.YAML.parse(await Bun.file(process.argv[1]).text());
+      const provider = config?.providers?.["agent-lb"];
+      if (!provider) throw new Error("agent-lb model provider is not configured");
+      const model = provider.models.find(item => item.id === "gpt-6.2-sol");
+      if (!model) throw new Error("agent-lb/gpt-6.2-sol is not configured");
+      function checkURL(value) {
+        const url = new URL(value);
+        const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+        if (url.username || url.password || url.search || url.hash || !(url.protocol === "https:" || (url.protocol === "http:" && loopback))) {
+          throw new Error("model baseUrl must be HTTPS or loopback HTTP, without credentials or query parameters");
+        }
+      }
+      if (provider.baseUrl) checkURL(provider.baseUrl);
+      checkURL(model.baseUrl || provider.baseUrl);
+      const {id, name, api, baseUrl, contextWindow, maxTokens, reasoning, input, cost} = model;
+      const models = [{id, name, api, baseUrl, contextWindow, maxTokens, reasoning, input, cost}];
+      process.stdout.write(JSON.stringify({providers: {"agent-lb": {baseUrl: provider.baseUrl, api: provider.api, apiKey: "AGENT_LB_API_KEY", models}}}));
+    ' "$agent_source/$models_name" >"$agent_dir/$models_name")
+    break
+  fi
+done
+eval_home="$WORK/eval-home"
+mkdir -m 700 "$eval_home"
+completion_runtime="${OMP_COMPLETION_RUNTIME:-$HOME/.local/share/omp-completion-runtime}"
+isolation_config="$WORK/isolation.yml"
+cat >"$isolation_config" <<'YAML'
+enabledProviders: []
+disabledProviders: [claude, claude-plugins, codex, gemini, github, opencode, cursor, windsurf, vscode, omp-plugins, agent-plugins, agents]
+mcp:
+  enableProjectConfig: true
+  shared: false
+startup:
+  setupWizard: false
+memory:
+  backend: "off"
+YAML
 
 (
   cd "$REPO_ROOT"
@@ -164,6 +221,9 @@ run_with_timeout() {
 passed=0
 total=0
 negatives_failed=0
+if [[ $DRY_RUN == false && -z $CASE_ID ]]; then
+  echo "MCP eval: start"
+fi
 
 while IFS=$'\t' read -r id prompt initial_json expected_json negative; do
   total=$((total + 1))
@@ -172,8 +232,8 @@ while IFS=$'\t' read -r id prompt initial_json expected_json negative; do
   out="$case_dir/out"
   stdout_file="$case_dir/stdout.txt"
   stderr_file="$case_dir/stderr.txt"
-  mcp_config="$case_dir/mcp.json"
-  mkdir -p "$home" "$out/rules"
+  mcp_config="$case_dir/.omp/mcp.json"
+  mkdir -p "$home" "$out/rules" "$case_dir/.omp"
 
   cat >"$home/twarp.yaml" <<'YAML'
 gateway:
@@ -221,17 +281,19 @@ json.dump({
 }, sys.stdout)
 PY
 
-  claude_cmd=(
-    claude -p "$prompt"
-    --strict-mcp-config
-    --mcp-config "$mcp_config"
-    --allowedTools "$ALLOWED_TOOLS"
-    --output-format text
+  omp_cmd=(
+    omp -p "$prompt"
+    --model agent-lb/gpt-6.2-sol
+    --no-session --no-tools --no-skills --no-rules --no-context-files
+    --trusted-extension "$SCRIPT_DIR/restrict-tools.ts"
+    --config "$isolation_config"
+    --system-prompt "Use the available twarp tools to respond to the user."
+    --approval-mode yolo
   )
 
   if [[ $DRY_RUN == true ]]; then
     printf 'DRY-RUN %s: ' "$id"
-    python3 - "${claude_cmd[@]}" <<'PY'
+    python3 - "${omp_cmd[@]}" <<'PY'
 import shlex
 import sys
 
@@ -240,21 +302,24 @@ PY
     continue
   fi
 
-  # Isolation: stdin is /dev/null (the case loop reads $CASE_ROWS on stdin, and
-  # claude -p appends piped stdin to the prompt, which leaked every expected
-  # answer), and the agent runs from the case directory, not the repository.
-  if (cd "$case_dir" && run_with_timeout "${claude_cmd[@]}" </dev/null >"$stdout_file" 2>"$stderr_file"); then
-    claude_status=0
+  # Never pass the remaining case rows on stdin or expose the repository.
+  if (cd "$case_dir" && unset CLAUDE_CONFIG_DIR PI_CONFIG_FILES XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME XDG_CACHE_HOME OMP_AUTH_BROKER_SNAPSHOT_CACHE && HOME="$eval_home" OMP_COMPLETION_RUNTIME="$completion_runtime" PI_CONFIG_DIR=.omp-eval PI_CODING_AGENT_DIR="$agent_dir" OMP_PROFILE=default PI_PROFILE=default OMP_MCP_REQUIRE_READY=1 run_with_timeout "${omp_cmd[@]}" </dev/null >"$stdout_file" 2>"$stderr_file"); then
+    omp_status=0
   else
-    claude_status=$?
+    omp_status=$?
   fi
 
   IFS=$'\t' read -r state_matches got_json < <(compare_state "$home/gateway-ips.json" "$expected_json")
   case_pass=true
   reasons=()
-  if ((claude_status != 0)); then
+  if ((omp_status != 0)); then
     case_pass=false
-    reasons+=("claude exited $claude_status")
+    reasons+=("omp exited $omp_status")
+    tail -20 "$stderr_file" >&2
+  fi
+  if ! grep -Fxq 'MCP_EVAL_TOOLS_RESTRICTED' "$stderr_file"; then
+    case_pass=false
+    reasons+=("tool restriction was not verified")
   fi
   if [[ $state_matches != true ]]; then
     case_pass=false
@@ -280,7 +345,7 @@ PY
     case_pass=false
     reasons+=("contaminated: agent response references the eval harness")
   fi
-  if [[ $negative == true ]] && ! grep -Eiq '(allowed|range|диапазон|domain|домен)' "$stdout_file"; then
+  if [[ $negative == true ]] && ! grep -Eiq '(allowed|range|диапазон|domain|домен|внутри.{0,80}100\.64\.0\.0/10)' "$stdout_file"; then
     case_pass=false
     reasons+=("negative response lacks an explanation")
   fi
@@ -324,10 +389,9 @@ if [[ $DRY_RUN == true ]]; then
   exit 0
 fi
 
-report_dir=/tmp/twarp-eval
-timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
-report_path="$report_dir/$timestamp.json"
+report_dir="${TWARP_EVAL_REPORT_DIR:-/tmp/twarp-eval}"
 mkdir -p "$report_dir"
+report_path="$(mktemp "$report_dir/$(date -u '+%Y%m%dT%H%M%SZ').XXXXXX")"
 python3 - "$RESULTS_FILE" "$report_path" "$passed" "$total" "$negatives_failed" <<'PY'
 import json
 import sys

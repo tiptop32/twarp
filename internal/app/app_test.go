@@ -81,6 +81,46 @@ func TestRoutesFollowRenderedRuleOrder(t *testing.T) {
 	}
 }
 
+func TestRoutesDescribeNamedVPNErrorsAndPriority(t *testing.T) {
+	service, base := newTestService(t, 501)
+	home := filepath.Join(base, "home")
+	path := filepath.Join(home, "twarp.yaml")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString("vpn:\n  tunnels:\n    - name: domains\n      domains: [ai.example]\n    - name: apps\n      process_path_regex: ['^/bin/example$']\n")
+	if closeErr := file.Close(); err != nil || closeErr != nil {
+		t.Fatal(err, closeErr)
+	}
+	if err := config.SaveSecrets(filepath.Join(home, "secrets.yaml"), config.Secrets{VPNURIs: map[string]string{"apps": "invalid-private-marker"}}); err != nil {
+		t.Fatal(err)
+	}
+	routes, err := service.Routes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes.Tunnels) != 2 || routes.Tunnels[0] != (VPNTunnel{Name: "domains", Tag: "vpn-domains", Problem: "not imported"}) || routes.Tunnels[1] != (VPNTunnel{Name: "apps", Tag: "vpn-apps", Problem: "invalid VPN URI"}) {
+		t.Fatalf("unexpected tunnel summary: %+v", routes.Tunnels)
+	}
+	var matches []string
+	for _, rule := range routes.Rules {
+		if strings.HasPrefix(rule.Outbound, "vpn-") {
+			matches = append(matches, rule.Outbound+":"+rule.Match)
+		}
+	}
+	if got := strings.Join(matches, "\n"); got != "vpn-apps:process paths ^/bin/example$\nvpn-domains:domains ai.example" {
+		t.Fatalf("unexpected tunnel rules:\n%s", got)
+	}
+	checks := make(map[string]Check)
+	for _, check := range service.Status(context.Background(), StatusOptions{}).Checks {
+		checks[check.Name] = check
+	}
+	if checks["vpn-domains"] != (Check{LevelFail, "vpn-domains", "not imported"}) || checks["vpn-apps"] != (Check{LevelFail, "vpn-apps", "invalid VPN URI"}) {
+		t.Fatal("status did not report named credential errors")
+	}
+}
+
 func TestGatewayRefusesRootAndRootActionsRequireIt(t *testing.T) {
 	root, _ := newTestService(t, 0)
 	if _, err := root.Gateway(); !errors.Is(err, ErrRootForbidden) {

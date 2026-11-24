@@ -32,7 +32,8 @@ type dnsEndpoint struct {
 	port    int
 	// keepDetour leaves the rendered detour in place so the query takes the
 	// production path (for the gateway server: TCP through the SOCKS gateway).
-	keepDetour bool
+	keepDetour  bool
+	certificate string // PEM for a local DoH fixture; retains the rendered HTTPS path
 }
 
 func startDNSStub(t *testing.T, network string) *dnsStub {
@@ -194,7 +195,11 @@ func patchDNSServers(t *testing.T, configPath string, endpoints map[string]dnsEn
 		server["type"] = endpoint.network
 		server["server"] = "127.0.0.1"
 		server["server_port"] = endpoint.port
-		delete(server, "path")
+		if endpoint.certificate != "" {
+			server["tls"] = map[string]any{"enabled": true, "certificate": []string{endpoint.certificate}}
+		} else {
+			delete(server, "path")
+		}
 		if !endpoint.keepDetour {
 			delete(server, "detour")
 		}
@@ -215,7 +220,7 @@ func patchDNSServers(t *testing.T, configPath string, endpoints map[string]dnsEn
 	}
 }
 
-func patchDirectDNSInbound(t *testing.T, configPath string, port int) {
+func patchDirectDNSInbound(t *testing.T, configPath string, port int, keepMixed bool) {
 	t.Helper()
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -225,10 +230,15 @@ func patchDirectDNSInbound(t *testing.T, configPath string, port int) {
 	if err := json.Unmarshal(data, &document); err != nil {
 		t.Fatalf("decode rendered config: %v", err)
 	}
-	document["inbounds"] = []any{map[string]any{
+	inbound := map[string]any{
 		"type": "direct", "tag": "dns-in", "listen": "127.0.0.1", "listen_port": port,
 		"network": "udp", "override_address": "192.0.2.53", "override_port": 53,
-	}}
+	}
+	var inbounds []any
+	if keepMixed {
+		inbounds, _ = document["inbounds"].([]any)
+	}
+	document["inbounds"] = append(inbounds, inbound)
 	patched, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		t.Fatalf("encode DNS inbound config: %v", err)

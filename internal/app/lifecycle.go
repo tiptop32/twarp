@@ -18,6 +18,7 @@ import (
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/state"
 	"github.com/tiptop32/twarp/internal/sysexec"
+	"github.com/tiptop32/twarp/internal/xray"
 )
 
 // Start turns the tunnel on without reinstalling: it loads the installed
@@ -208,7 +209,11 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		release()
 		return "", s.failApply(fmt.Errorf("read installed sing-box config: %w", configReadErr))
 	}
-	reusingProxyPort, err := singbox.CheckVPNProxyPort(ctx, s.deps.Runner, cfg.VPNProxy, previousConfig)
+	if err := xray.CheckPorts(ctx, s.deps.Runner, uid, cfg.VPN.Tunnels); err != nil {
+		release()
+		return "", s.failApply(err)
+	}
+	newListeners, err := singbox.CheckLoopbackPorts(ctx, s.deps.Runner, render.LoopbackListeners(cfg), previousConfig)
 	if err != nil {
 		release()
 		return "", s.failApply(err)
@@ -283,14 +288,12 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 	} else if err := sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget()); err != nil {
 		return failAfterPromotion(fmt.Errorf("kickstart sing-box: %w", err), false)
 	}
-	if !reusingProxyPort {
-		if err := singbox.WaitVPNProxy(ctx, s.deps.Runner, cfg.VPNProxy); err != nil {
-			_, failure := failAfterPromotion(err, false)
-			if recoveryErr := sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget()); recoveryErr != nil {
-				failure = errors.Join(failure, fmt.Errorf("restart restored sing-box config: %w", recoveryErr))
-			}
-			return "", failure
+	if err := singbox.WaitLoopbackPorts(ctx, s.deps.Runner, sysexec.SystemTarget(), newListeners); err != nil {
+		_, failure := failAfterPromotion(err, false)
+		if recoveryErr := sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget()); recoveryErr != nil {
+			failure = errors.Join(failure, fmt.Errorf("restart restored sing-box config: %w", recoveryErr))
 		}
+		return "", failure
 	}
 	release()
 	note, resolverErr := s.SyncResolvers(ctx, cfg.Gateway.Domains)

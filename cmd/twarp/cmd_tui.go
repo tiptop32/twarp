@@ -181,9 +181,8 @@ type (
 // egressResult is the last manual network check. Periodic status refreshes
 // skip that probe, so the result is kept apart from status.
 type egressResult struct {
-	check  app.Check
-	ip     string
-	viaVPN bool
+	check app.Check
+	ip    string
 }
 
 type tuiModel struct {
@@ -439,7 +438,7 @@ func (m *tuiModel) setMessage(text string, isErr bool) {
 func egressFrom(status app.Status) *egressResult {
 	for _, check := range status.Checks {
 		if check.Name == "egress" {
-			return &egressResult{check: check, ip: status.EgressIP, viaVPN: status.EgressViaVPN}
+			return &egressResult{check: check, ip: status.EgressIP}
 		}
 	}
 	return nil
@@ -739,6 +738,13 @@ func (m tuiModel) viewRoutesSummary() string {
 		{"DIRECT", direct, strings.Join(routes.GeoRuleSets, ", ")},
 		{"VPN", vpn, "default"},
 	}
+	for index, tunnel := range routes.Tunnels {
+		state := tunnel.Protocol
+		if tunnel.Problem != "" {
+			state = tunnel.Problem
+		}
+		rows = append(rows, []string{fmt.Sprintf("%d:%s", index+1, ansi.Truncate(tunnel.Tag, 14, "…")), state, "selected traffic"})
+	}
 	return strings.Join(append(lines, formatTable(nil, rows)...), "\n")
 }
 
@@ -773,6 +779,9 @@ func (m tuiModel) viewTraffic() string {
 		{app.OutboundVPN, vpnTarget, vpnState, conns(app.OutboundVPN)},
 	}
 	lines = append(lines, formatTable(nil, rows)...)
+	for index, tunnel := range m.routes.Tunnels {
+		lines = append(lines, fmt.Sprintf("%d: %s   %s", index+1, conns(tunnel.Tag), tunnel.Tag))
+	}
 	checks := m.status.Checks
 	if m.egress != nil {
 		checks = append(checks[:len(checks):len(checks)], m.egress.check)
@@ -897,7 +906,7 @@ func viewHelp() string {
 		{"r", "route rules in sing-box order"},
 		{"l", "sing-box log, follows new lines"},
 		{"c", "active connections by outbound"},
-		{"n", "check egress through the vpn (contacts ifconfig.me)"},
+		{"n", "check public egress IP against primary VPN server (ifconfig.me)"},
 		{"R", "refresh everything"},
 		{"s", "start or stop the tunnel"},
 		{"a", "apply twarp.yaml and secrets.yaml"},

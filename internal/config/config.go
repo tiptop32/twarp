@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -61,15 +62,61 @@ type DirectConfig struct {
 	LocalDomains []string
 }
 
-// VPNConfig configures the VPN DNS resolver.
+// VPNConfig configures the primary resolver and ordered additional tunnels.
 type VPNConfig struct {
-	DNS string
+	DNS                  string
+	ForceProviderDomains bool
+	CIDRs                []string
+	ProcessPathRegex     []string
+	Tunnels              []Tunnel
+}
+
+// Tunnel is a validated additional VPN and its traffic selectors.
+type Tunnel struct {
+	Name             string
+	DNS              string
+	DNSExplicit      bool
+	Domains          []string
+	CIDRs            []string
+	ProcessPathRegex []string
+	Xray             *XrayPorts
+}
+
+// Tag returns the sing-box outbound tag for this tunnel.
+func (t Tunnel) Tag() string { return "vpn-" + t.Name }
+
+// XrayPorts enables a separate Xray client for one additional tunnel.
+// Both listeners bind IPv4 loopback. The bridge carries only the upstream
+// VLESS connection, so sing-box can bind it to the current network interface.
+type XrayPorts struct {
+	Listen uint16 `yaml:"listen_port"`
+	Bridge uint16 `yaml:"bridge_port"`
+}
+
+type rawTunnel struct {
+	Name             string     `yaml:"name"`
+	DNS              string     `yaml:"dns"`
+	Domains          []string   `yaml:"domains"`
+	CIDRs            []string   `yaml:"cidrs"`
+	ProcessPathRegex []string   `yaml:"process_path_regex"`
+	Xray             *XrayPorts `yaml:"xray"`
+}
+
+var tunnelName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
+// ValidTunnelName reports whether name can identify an additional VPN.
+func ValidTunnelName(name string) bool { return tunnelName.MatchString(name) }
+
+// ValidXrayTunnelName excludes case aliases of login agent files on APFS.
+func ValidXrayTunnelName(name string) bool {
+	return ValidTunnelName(name) && name == strings.ToLower(name)
 }
 
 // Secrets is the contents of secrets.yaml.
 type Secrets struct {
-	VPNURI      string `yaml:"vpn_uri"`
-	ClashSecret string `yaml:"clash_secret"`
+	VPNURI      string            `yaml:"vpn_uri"`
+	VPNURIs     map[string]string `yaml:"vpn_uris,omitempty"`
+	ClashSecret string            `yaml:"clash_secret"`
 	// GatewaySocksUser and GatewaySocksPassword are the optional SOCKS5
 	// username/password (RFC 1929) of the gateway; set together or not at all.
 	GatewaySocksUser     string `yaml:"gateway_socks_user,omitempty"`
@@ -108,7 +155,11 @@ type rawConfig struct {
 		LocalDomains []string `yaml:"local_domains"`
 	} `yaml:"direct"`
 	VPN struct {
-		DNS string `yaml:"dns"`
+		DNS                  string      `yaml:"dns"`
+		Tunnels              []rawTunnel `yaml:"tunnels"`
+		ForceProviderDomains bool        `yaml:"force_provider_domains"`
+		CIDRs                []string    `yaml:"cidrs"`
+		ProcessPathRegex     []string    `yaml:"process_path_regex"`
 	} `yaml:"vpn"`
 	ClashAPI string    `yaml:"clash_api"`
 	LogLevel string    `yaml:"log_level"`
@@ -167,7 +218,8 @@ func LoadSecrets(path string) (Secrets, error) {
 	decoder := yaml.NewDecoder(file)
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&secrets); err != nil {
-		return Secrets{}, fmt.Errorf("decode secrets %q: %w", path, err)
+		// YAML errors can include mapping keys and scalar values verbatim.
+		return Secrets{}, fmt.Errorf("decode secrets %q: invalid YAML or unknown fields", path)
 	}
 	if err := ValidateGatewayAuth(secrets.GatewaySocksUser, secrets.GatewaySocksPassword); err != nil {
 		return Secrets{}, fmt.Errorf("secrets %q: %w", path, err)
@@ -185,6 +237,27 @@ func SaveSecrets(path string, secrets Secrets) error {
 		return fmt.Errorf("write secrets %q: %w", path, err)
 	}
 	return nil
+}
+
+// UpdateSecrets serializes read-modify-write operations across CLI processes.
+// Readers need no lock: SaveSecrets publishes a complete file by rename.
+func UpdateSecrets(path string, update func(*Secrets) error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create secrets directory: %w", err)
+	}
+	release, err := fsutil.LockExclusive(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer release()
+	secrets, err := LoadSecrets(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := update(&secrets); err != nil {
+		return err
+	}
+	return SaveSecrets(path, secrets)
 }
 
 // validateGatewayHost accepts an IP literal or a DNS host name (RFC 1123
@@ -277,6 +350,13 @@ func validateConfig(raw rawConfig) (Config, error) {
 	if vpnDNS, err := url.Parse(raw.VPN.DNS); err != nil || vpnDNS.Scheme != "https" || vpnDNS.Host == "" {
 		return Config{}, errors.New("vpn.dns must be an https:// URL with a host")
 	}
+	if err := validateVPNSelectors("vpn", raw.VPN.CIDRs, raw.VPN.ProcessPathRegex); err != nil {
+		return Config{}, err
+	}
+	tunnels, err := validateTunnels(raw.VPN.Tunnels, raw.VPN.DNS)
+	if err != nil {
+		return Config{}, err
+	}
 	if !validHostPort(raw.ClashAPI) {
 		return Config{}, errors.New("clash_api must be host:port with a port from 1 to 65535")
 	}
@@ -294,6 +374,9 @@ func validateConfig(raw rawConfig) (Config, error) {
 		if port, _ := strconv.ParseUint(clashPort, 10, 16); uint16(port) == vpnProxyPort {
 			return Config{}, errors.New("vpn_proxy_port must differ from the clash_api port")
 		}
+	}
+	if err := validateXrayPorts(tunnels, vpnProxyPort, raw.ClashAPI, raw.Gateway.Socks); err != nil {
+		return Config{}, err
 	}
 	if (raw.VPNProxyTLSCert == "") != (raw.VPNProxyTLSKey == "") {
 		return Config{}, errors.New("vpn_proxy_tls_cert and vpn_proxy_tls_key must be set together")
@@ -314,8 +397,11 @@ func validateConfig(raw rawConfig) (Config, error) {
 			DNS:           raw.Gateway.DNS,
 			AllowedRanges: allowedRanges,
 		},
-		Direct:   DirectConfig{DNS: raw.Direct.DNS, LocalDomains: localDomains},
-		VPN:      VPNConfig{DNS: raw.VPN.DNS},
+		Direct: DirectConfig{DNS: raw.Direct.DNS, LocalDomains: localDomains},
+		VPN: VPNConfig{
+			DNS: raw.VPN.DNS, ForceProviderDomains: raw.VPN.ForceProviderDomains,
+			CIDRs: raw.VPN.CIDRs, ProcessPathRegex: raw.VPN.ProcessPathRegex, Tunnels: tunnels,
+		},
 		ClashAPI: raw.ClashAPI,
 		LogLevel: raw.LogLevel,
 		VPNProxy: vpnProxyPort,
@@ -323,6 +409,99 @@ func validateConfig(raw rawConfig) (Config, error) {
 		VPNProxyTLSCert: raw.VPNProxyTLSCert,
 		VPNProxyTLSKey:  raw.VPNProxyTLSKey,
 	}, nil
+}
+
+func validateTunnels(raw []rawTunnel, defaultDNS string) ([]Tunnel, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	tunnels := make([]Tunnel, 0, len(raw))
+	names := make(map[string]struct{}, len(raw))
+	for i, t := range raw {
+		if !ValidTunnelName(t.Name) {
+			return nil, fmt.Errorf("vpn.tunnels[%d].name must contain only ASCII letters, digits or hyphens", i)
+		}
+		field := "vpn.tunnels." + t.Name
+		if _, exists := names[t.Name]; exists {
+			return nil, fmt.Errorf("%s: duplicate tunnel name", field)
+		}
+		names[t.Name] = struct{}{}
+		if len(t.Domains)+len(t.CIDRs)+len(t.ProcessPathRegex) == 0 {
+			return nil, fmt.Errorf("%s must have at least one traffic selector", field)
+		}
+		explicitDNS := t.DNS != ""
+		if t.DNS == "" {
+			t.DNS = defaultDNS
+		}
+		dns, err := url.Parse(t.DNS)
+		if err != nil || dns.Scheme != "https" || dns.Hostname() == "" || (explicitDNS && (dns.User != nil || dns.RawQuery != "" || dns.Fragment != "" || (dns.Port() != "" && !validHostPort(dns.Host)))) {
+			return nil, fmt.Errorf("%s.dns must be an https:// URL with a host and optional port and path", field)
+		}
+		domains, err := normalizeDomains(field+".domains", t.Domains)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateVPNSelectors(field, t.CIDRs, t.ProcessPathRegex); err != nil {
+			return nil, err
+		}
+		tunnels = append(tunnels, Tunnel{Name: t.Name, DNS: t.DNS, DNSExplicit: explicitDNS, Domains: domains, CIDRs: t.CIDRs, ProcessPathRegex: t.ProcessPathRegex, Xray: t.Xray})
+	}
+	return tunnels, nil
+}
+
+func validateXrayPorts(tunnels []Tunnel, vpnProxy uint16, clash, gateway string) error {
+	if len(tunnels) == 0 {
+		return nil
+	}
+	ports := map[uint16]string{vpnProxy: "vpn_proxy_port"}
+	addEndpoint := func(endpoint, field string) {
+		_, port, _ := net.SplitHostPort(endpoint)
+		number, _ := strconv.ParseUint(port, 10, 16)
+		ports[uint16(number)] = field
+	}
+	addEndpoint(clash, "clash_api")
+	host, _, _ := net.SplitHostPort(gateway)
+	if addr, err := netip.ParseAddr(host); err == nil && addr.Unmap() == netip.MustParseAddr("127.0.0.1") {
+		addEndpoint(gateway, "gateway.socks")
+	}
+	for _, tunnel := range tunnels {
+		if tunnel.Xray == nil {
+			continue
+		}
+		if !ValidXrayTunnelName(tunnel.Name) {
+			return fmt.Errorf("vpn.tunnels.%s.xray requires a lowercase tunnel name", tunnel.Name)
+		}
+		for _, spec := range []struct {
+			name string
+			port uint16
+		}{{"listen_port", tunnel.Xray.Listen}, {"bridge_port", tunnel.Xray.Bridge}} {
+			field := "vpn.tunnels." + tunnel.Name + ".xray." + spec.name
+			if spec.port == 0 {
+				return fmt.Errorf("%s must be a port from 1 to 65535", field)
+			}
+			if previous, conflict := ports[spec.port]; conflict {
+				return fmt.Errorf("%s conflicts with %s", field, previous)
+			}
+			ports[spec.port] = field
+		}
+	}
+	return nil
+}
+
+func validateVPNSelectors(field string, cidrs, expressions []string) error {
+	for i, value := range cidrs {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil || prefix.Bits() == 0 {
+			return fmt.Errorf("%s.cidrs contains invalid or default prefix %q", field, value)
+		}
+		cidrs[i] = prefix.Masked().String()
+	}
+	for i, expression := range expressions {
+		if _, err := regexp.Compile(expression); strings.TrimSpace(expression) == "" || err != nil {
+			return fmt.Errorf("%s.process_path_regex[%d] must be a non-empty regular expression", field, i)
+		}
+	}
+	return nil
 }
 
 func validHostPort(value string) bool {

@@ -31,6 +31,8 @@ type socksServer struct {
 	conns     map[net.Conn]struct{}
 	waitGroup sync.WaitGroup
 	relay     atomic.Bool
+
+	udpAssociations atomic.Int32
 }
 
 // EnableRelay makes the stub forward CONNECT requests to their destination
@@ -40,7 +42,12 @@ func (s *socksServer) EnableRelay() { s.relay.Store(true) }
 
 func startSOCKSServer(t *testing.T) *socksServer {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	return startSOCKSServerAt(t, "127.0.0.1:0")
+}
+
+func startSOCKSServerAt(t *testing.T, address string) *socksServer {
+	t.Helper()
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		t.Fatalf("listen for SOCKS5 stub: %v", err)
 	}
@@ -51,16 +58,18 @@ func startSOCKSServer(t *testing.T) *socksServer {
 	}
 	server.waitGroup.Add(1)
 	go server.serve()
-	t.Cleanup(func() {
-		_ = server.listener.Close()
-		server.mu.Lock()
-		for conn := range server.conns {
-			_ = conn.Close()
-		}
-		server.mu.Unlock()
-		server.waitGroup.Wait()
-	})
+	t.Cleanup(server.stop)
 	return server
+}
+
+func (s *socksServer) stop() {
+	_ = s.listener.Close()
+	s.mu.Lock()
+	for conn := range s.conns {
+		_ = conn.Close()
+	}
+	s.mu.Unlock()
+	s.waitGroup.Wait()
 }
 
 func (s *socksServer) Port() int {
@@ -129,7 +138,13 @@ func (s *socksServer) handle(conn net.Conn) {
 	}
 
 	request := make([]byte, 4)
-	if _, err := io.ReadFull(conn, request); err != nil || request[0] != 5 || request[1] != 1 {
+	if _, err := io.ReadFull(conn, request); err != nil || request[0] != 5 {
+		return
+	}
+	if request[1] == 3 {
+		s.udpAssociations.Add(1)
+	}
+	if request[1] != 1 {
 		return
 	}
 	host, err := readSOCKSHost(conn, request[3])

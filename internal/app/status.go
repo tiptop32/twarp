@@ -48,7 +48,7 @@ type Check struct {
 
 // StatusOptions selects optional, slower checks.
 type StatusOptions struct {
-	// Network also compares the public egress address with the vpn server
+	// Network also compares the public egress address with the primary VPN server
 	// and sends one CONNECT through the gateway to gateway.dns.
 	Network bool
 }
@@ -76,8 +76,7 @@ type Status struct {
 	GeoUpdated time.Time
 
 	// EgressIP is set when StatusOptions.Network ran and found the address.
-	EgressIP     string
-	EgressViaVPN bool
+	EgressIP string
 }
 
 // Failed reports whether any check failed.
@@ -126,7 +125,7 @@ func (s *Service) Status(ctx context.Context, options StatusOptions) Status {
 	checkLive(&status, live)
 	s.checkTunnel(ctx, &status)
 	checkGatewayCIDRs(&status, paths)
-	checkGeo(&status, paths.GeoDir(), s.now())
+	checkGeo(&status, paths.GeoDir(), s.now(), cfg.VPN.ForceProviderDomains)
 	if options.Network {
 		if secrets.VPNURI == "" {
 			status.add(LevelFail, "egress", "no vpn URI: run twarp import < key.txt")
@@ -134,7 +133,70 @@ func (s *Service) Status(ctx context.Context, options StatusOptions) Status {
 			s.checkEgress(ctx, &status, secrets.VPNURI)
 		}
 	}
+	if err == nil && len(cfg.VPN.Tunnels) != 0 {
+		s.checkAdditionalVPNs(ctx, &status, cfg, secrets, options.Network)
+	}
 	return status
+}
+
+func (s *Service) checkAdditionalVPNs(ctx context.Context, status *Status, cfg config.Config, secrets config.Secrets, network bool) {
+	budget := statusProbeTimeout
+	if network {
+		budget += egressProbeTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	for _, tunnel := range cfg.VPN.Tunnels {
+		info := describeTunnel(tunnel, secrets.VPNURIs[tunnel.Name])
+		switch {
+		case info.Problem != "":
+			status.add(LevelFail, info.Tag, info.Problem)
+		case tunnel.Xray == nil:
+			status.add(LevelOK, info.Tag, info.Protocol+" credentials valid; no connectivity probe")
+		case ctx.Err() != nil:
+			status.add(LevelWarn, info.Tag, "Xray status probe budget exhausted")
+		default:
+			s.checkXray(ctx, status, cfg, secrets, tunnel, network)
+		}
+	}
+}
+
+func (s *Service) checkXray(ctx context.Context, status *Status, cfg config.Config, secrets config.Secrets, tunnel config.Tunnel, network bool) {
+	tag := tunnel.Tag()
+	job, err := s.xrayJob(tunnel.Name)
+	if err != nil || s.deps.Runner == nil {
+		status.add(LevelWarn, tag, "Xray listener can only be checked from the owner’s login session")
+		return
+	}
+	address := netip.AddrPortFrom(netip.MustParseAddr(singbox.VPNProxyListen), tunnel.Xray.Listen)
+	probe, cancel := context.WithTimeout(ctx, statusProbeTimeout)
+	owned := sysexec.OwnsTCPListener(probe, s.deps.Runner, job.target, address.String())
+	cancel()
+	if ctx.Err() != nil {
+		status.add(LevelWarn, tag, "Xray status probe budget exhausted")
+		return
+	}
+	if !owned {
+		status.add(LevelFail, tag, "Xray login agent does not own the configured loopback port; run twarp xray install "+tunnel.Name)
+		return
+	}
+	if !network {
+		status.add(LevelOK, tag, "Xray is listening; upstream not probed")
+		return
+	}
+	probe, cancel = context.WithTimeout(ctx, egressProbeTimeout)
+	defer cancel()
+	clash := singbox.Clash{Addr: cfg.ClashAPI, Secret: secrets.ClashSecret, Client: s.deps.HTTPClient}
+	err = clash.ProbeXray(probe, tag)
+	if ctx.Err() != nil {
+		status.add(LevelWarn, tag, "Xray status probe budget exhausted")
+		return
+	}
+	if err != nil {
+		status.add(LevelFail, tag, "Xray is listening, but HTTPS probe failed: "+err.Error())
+		return
+	}
+	status.add(LevelOK, tag, "HTTPS probe through Xray succeeded")
 }
 
 func (s *Service) checkSingBox(ctx context.Context, status *Status, cfg config.Config, secrets config.Secrets) {
@@ -332,10 +394,10 @@ func checkGatewayCIDRs(status *Status, paths config.Paths) {
 	status.add(LevelOK, "gateway CIDRs", fmt.Sprintf("%d CIDRs", len(prefixes)))
 }
 
-func checkGeo(status *Status, directory string, now time.Time) {
+func checkGeo(status *Status, directory string, now time.Time, forceProviders bool) {
 	var oldest time.Time
 	missing := false
-	for _, source := range geo.DefaultSources {
+	for _, source := range geo.RequiredSources(forceProviders) {
 		info, err := os.Stat(filepath.Join(directory, source.Name))
 		if err != nil {
 			missing = true
@@ -408,10 +470,9 @@ func (s *Service) checkEgress(ctx context.Context, status *Status, vpnURI string
 	}
 	for _, serverIP := range serverIPs {
 		if serverIP.Equal(net.IP(externalIP.AsSlice())) {
-			status.EgressViaVPN = true
-			status.add(LevelOK, "egress", "egress via vpn "+externalIP.String())
+			status.add(LevelOK, "egress", "egress IP matches primary vpn server: "+externalIP.String())
 			return
 		}
 	}
-	status.add(LevelWarn, "egress", fmt.Sprintf("egress %s differs from vpn server %s (destination may be routed direct)", externalIP, serverIPs[0]))
+	status.add(LevelWarn, "egress", fmt.Sprintf("egress %s differs from primary vpn server %s (the probe may use another route)", externalIP, serverIPs[0]))
 }

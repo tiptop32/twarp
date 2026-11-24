@@ -15,6 +15,7 @@ import (
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/uri"
+	"github.com/tiptop32/twarp/internal/xray"
 )
 
 const (
@@ -50,7 +51,8 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 	if _, err := RenderRuleSet(prefixes); err != nil {
 		return nil, err
 	}
-	if err := checkGeoRuleSets(opts.Paths); err != nil {
+	ruleSets, err := routeRuleSets(opts.Paths, cfg.VPN.ForceProviderDomains)
+	if err != nil {
 		return nil, err
 	}
 	inbound, err := renderInbound(opts)
@@ -66,13 +68,10 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 	if err != nil {
 		return nil, fmt.Errorf("parse VPN URI: %w", err)
 	}
-	remoteDNS, err := url.Parse(cfg.VPN.DNS)
-	if err != nil || remoteDNS.Hostname() == "" {
-		return nil, errors.New("parse VPN DNS URL")
-	}
-	remotePath := remoteDNS.EscapedPath()
-	if remotePath == "/dns-query" {
-		remotePath = ""
+	// Keep the historical default HTTPS port for the primary resolver.
+	dns, err := vpnDNS(cfg.VPN.DNS, "remote", "vpn", false)
+	if err != nil {
+		return nil, err
 	}
 
 	outbounds := []singbox.Outbound{
@@ -83,16 +82,56 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 		},
 		vpn,
 	}
+	servers := make([]singbox.DNSServer, 0, 4+len(cfg.VPN.Tunnels))
+	servers = append(servers,
+		singbox.DNSServer{Type: "tcp", Tag: "gateway", Server: cfg.Gateway.DNS, Detour: "gateway"},
+		singbox.DNSServer{Type: "udp", Tag: "direct", Server: cfg.Direct.DNS},
+		singbox.DNSServer{Type: "local", Tag: "local"}, dns,
+	)
+	inbounds := []singbox.Inbound{inbound}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		raw := secrets.VPNURIs[tunnel.Name]
+		if raw == "" {
+			return nil, fmt.Errorf("VPN tunnel %q: import a VPN URI first", tunnel.Name)
+		}
+		outbound, err := uri.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("VPN tunnel %q: invalid VPN URI", tunnel.Name)
+		}
+		outbound.Tag = tunnel.Tag()
+		if tunnel.Xray != nil {
+			if secrets.ClashSecret == "" {
+				return nil, fmt.Errorf("VPN tunnel %q: generate local credentials with twarp import", tunnel.Name)
+			}
+			ports := *tunnel.Xray
+			if (socks.Addr().Unmap().String() == singbox.VPNProxyListen && (socks.Port() == ports.Listen || socks.Port() == ports.Bridge)) ||
+				(opts.Inbound == InboundMixed && (opts.MixedPort == ports.Listen || opts.MixedPort == ports.Bridge)) {
+				return nil, fmt.Errorf("VPN tunnel %q: Xray ports conflict with an existing endpoint", tunnel.Name)
+			}
+			if addr, err := netip.ParseAddr(outbound.Server); err == nil && addr.Unmap().IsLoopback() &&
+				(outbound.ServerPort == ports.Listen || outbound.ServerPort == ports.Bridge) {
+				return nil, fmt.Errorf("VPN tunnel %q: Xray ports conflict with its upstream endpoint", tunnel.Name)
+			}
+			inbounds = append(inbounds, singbox.Inbound{
+				Type: "direct", Tag: xray.BridgeTag(tunnel), Listen: singbox.VPNProxyListen, ListenPort: ports.Bridge,
+				Network: "tcp", OverrideAddress: outbound.Server, OverridePort: outbound.ServerPort,
+			})
+			outbound = xray.LocalOutbound(tunnel, secrets.ClashSecret)
+		}
+		dns, err := vpnDNS(tunnel.DNS, outbound.Tag+"-dns", outbound.Tag, tunnel.DNSExplicit)
+		if err != nil {
+			return nil, fmt.Errorf("VPN tunnel %q: %w", tunnel.Name, err)
+		}
+		outbounds = append(outbounds, outbound)
+		servers = append(servers, dns)
+	}
 	for i := range outbounds {
 		if override, ok := opts.Outbounds[outbounds[i].Tag]; ok {
 			outbounds[i] = override
 		}
 	}
 
-	var inbounds []singbox.Inbound
-	if cfg.VPNProxy == 0 {
-		inbounds = []singbox.Inbound{inbound}
-	} else {
+	if cfg.VPNProxy != 0 {
 		if socks.Addr().Unmap().String() == singbox.VPNProxyListen && socks.Port() == cfg.VPNProxy {
 			return nil, errors.New("vpn_proxy_port conflicts with the resolved gateway SOCKS endpoint")
 		}
@@ -101,7 +140,7 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 			proxy.Type = "http"
 			proxy.TLS = &singbox.InboundTLS{Enabled: true, CertificatePath: cfg.VPNProxyTLSCert, KeyPath: cfg.VPNProxyTLSKey}
 		}
-		inbounds = []singbox.Inbound{inbound, proxy}
+		inbounds = append(inbounds, proxy)
 	}
 
 	generated := singbox.Config{
@@ -109,24 +148,16 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		DNS: singbox.DNS{
-			Servers: []singbox.DNSServer{
-				{Type: "tcp", Tag: "gateway", Server: cfg.Gateway.DNS, Detour: "gateway"},
-				{Type: "udp", Tag: "direct", Server: cfg.Direct.DNS},
-				{Type: "local", Tag: "local"},
-				{Type: "https", Tag: "remote", Server: remoteDNS.Hostname(), Path: remotePath, Detour: "vpn"},
-			},
-			Rules:          dnsRules(cfg),
-			Final:          "remote",
-			Strategy:       "prefer_ipv4",
-			ReverseMapping: true,
+			Servers:  servers,
+			Rules:    dnsRules(cfg),
+			Final:    "remote",
+			Strategy: "prefer_ipv4",
+			// A shared IP must not inherit another connection's VPN selection.
+			ReverseMapping: len(cfg.VPN.Tunnels) == 0,
 		},
 		Route: singbox.Route{
-			Rules: routeRules(cfg, socksPrefix),
-			RuleSets: []singbox.RuleSet{
-				{Type: "local", Tag: "gateway-ip", Format: "source", Path: RuleSetPath(opts.Paths.RulesDir())},
-				{Type: "local", Tag: "geoip-ru", Format: "binary", Path: filepath.Join(opts.Paths.GeoDir(), "geoip-ru.srs")},
-				{Type: "local", Tag: "geosite-category-ru", Format: "binary", Path: filepath.Join(opts.Paths.GeoDir(), "geosite-category-ru.srs")},
-			},
+			Rules:                 routeRules(cfg, socksPrefix),
+			RuleSets:              ruleSets,
 			Final:                 "vpn",
 			AutoDetectInterface:   true,
 			DefaultDomainResolver: "direct",
@@ -144,19 +175,71 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 	return append(data, '\n'), nil
 }
 
+func vpnDNS(raw, tag, detour string, includePort bool) (singbox.DNSServer, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return singbox.DNSServer{}, errors.New("parse VPN DNS URL")
+	}
+	server := singbox.DNSServer{Type: "https", Tag: tag, Server: u.Hostname(), Detour: detour}
+	if path := u.EscapedPath(); path != "/dns-query" {
+		server.Path = path
+	}
+	if text := u.Port(); includePort && text != "" {
+		port, err := strconv.ParseUint(text, 10, 16)
+		if err != nil || port == 0 {
+			return singbox.DNSServer{}, errors.New("invalid VPN DNS port")
+		}
+		server.ServerPort = uint16(port)
+	}
+	return server, nil
+}
+
 // dnsRules resolves gateway domains through the gateway DNS first; everything
 // unmatched falls through to the remote resolver over the vpn.
 func dnsRules(cfg config.Config) []singbox.DNSRule {
 	rules := []singbox.DNSRule{{DomainSuffix: cfg.Gateway.Domains, Server: "gateway"}}
+	if len(cfg.VPN.Tunnels) == 0 && cfg.VPN.ForceProviderDomains {
+		rules = append(rules, singbox.DNSRule{RuleSet: providerRuleSets, Server: "remote"})
+	}
 	// A rule without conditions matches everything in sing-box, so the optional
 	// local_domains rule exists only when the list is non-empty.
 	if len(cfg.Direct.LocalDomains) > 0 {
 		rules = append(rules, singbox.DNSRule{DomainSuffix: cfg.Direct.LocalDomains, Server: "local"})
 	}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		if len(tunnel.ProcessPathRegex) > 0 {
+			rules = append(rules, singbox.DNSRule{ProcessPathRegex: tunnel.ProcessPathRegex, Server: tunnel.Tag() + "-dns"})
+		}
+	}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		if len(tunnel.Domains) > 0 {
+			rules = append(rules, singbox.DNSRule{DomainSuffix: tunnel.Domains, Server: tunnel.Tag() + "-dns"})
+		}
+	}
+	if len(cfg.VPN.Tunnels) != 0 && cfg.VPN.ForceProviderDomains {
+		rules = append(rules, singbox.DNSRule{RuleSet: providerRuleSets, Server: "remote"})
+	}
+	if len(cfg.VPN.ProcessPathRegex) != 0 {
+		rules = append(rules, singbox.DNSRule{ProcessPathRegex: cfg.VPN.ProcessPathRegex, Server: "remote"})
+	}
 	return append(rules,
 		singbox.DNSRule{DomainSuffix: directSuffixes, Server: "direct"},
 		singbox.DNSRule{RuleSet: []string{"geosite-category-ru"}, Server: "direct"},
 	)
+}
+
+// LoopbackListeners returns the optional TCP listeners checked during deployment.
+func LoopbackListeners(cfg config.Config) []singbox.LoopbackListener {
+	var listeners []singbox.LoopbackListener
+	if cfg.VPNProxy != 0 {
+		listeners = append(listeners, singbox.LoopbackListener{Port: cfg.VPNProxy, Tag: singbox.VPNProxyTag, Field: "vpn_proxy_port"})
+	}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		if tunnel.Xray != nil {
+			listeners = append(listeners, singbox.LoopbackListener{Port: tunnel.Xray.Bridge, Tag: xray.BridgeTag(tunnel), Field: "vpn.tunnels." + tunnel.Name + ".xray.bridge_port"})
+		}
+	}
+	return listeners
 }
 
 // RouteRules returns the route rules Render writes, in order, so front ends can
@@ -178,6 +261,11 @@ func routeRules(cfg config.Config, socksPrefix string) []singbox.RouteRule {
 	if cfg.VPNProxy != 0 {
 		rules = append(rules, singbox.RouteRule{Inbound: []string{singbox.VPNProxyTag}, Outbound: "vpn"})
 	}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		if tunnel.Xray != nil {
+			rules = append(rules, singbox.RouteRule{Inbound: []string{xray.BridgeTag(tunnel)}, Outbound: "direct"})
+		}
+	}
 	rules = append(rules,
 		singbox.RouteRule{Action: "sniff"},
 		singbox.RouteRule{Protocol: "dns", Action: "hijack-dns"},
@@ -186,8 +274,35 @@ func routeRules(cfg config.Config, socksPrefix string) []singbox.RouteRule {
 		singbox.RouteRule{RuleSet: []string{"gateway-ip"}, Outbound: "gateway"},
 		singbox.RouteRule{IPIsPrivate: true, Outbound: "direct"},
 	)
-	if len(cfg.Direct.LocalDomains) > 0 {
-		rules = append(rules, singbox.RouteRule{DomainSuffix: cfg.Direct.LocalDomains, Outbound: "direct"})
+	local := singbox.RouteRule{DomainSuffix: cfg.Direct.LocalDomains, Outbound: "direct"}
+	if len(cfg.VPN.Tunnels) != 0 && len(cfg.Direct.LocalDomains) != 0 {
+		rules = append(rules, local)
+	}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		if len(tunnel.ProcessPathRegex) > 0 {
+			rules = append(rules, singbox.RouteRule{ProcessPathRegex: tunnel.ProcessPathRegex, Outbound: tunnel.Tag()})
+		}
+	}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		tag := tunnel.Tag()
+		if len(tunnel.Domains) > 0 {
+			rules = append(rules, singbox.RouteRule{DomainSuffix: tunnel.Domains, Outbound: tag})
+		}
+		if len(tunnel.CIDRs) > 0 {
+			rules = append(rules, singbox.RouteRule{IPCIDR: tunnel.CIDRs, Outbound: tag})
+		}
+	}
+	if cfg.VPN.ForceProviderDomains {
+		rules = append(rules, singbox.RouteRule{RuleSet: providerRuleSets, Outbound: "vpn"})
+	}
+	if len(cfg.VPN.CIDRs) != 0 {
+		rules = append(rules, singbox.RouteRule{IPCIDR: cfg.VPN.CIDRs, Outbound: "vpn"})
+	}
+	if len(cfg.VPN.Tunnels) == 0 && len(cfg.Direct.LocalDomains) != 0 {
+		rules = append(rules, local)
+	}
+	if len(cfg.VPN.ProcessPathRegex) != 0 {
+		rules = append(rules, singbox.RouteRule{ProcessPathRegex: cfg.VPN.ProcessPathRegex, Outbound: "vpn"})
 	}
 	return append(rules,
 		singbox.RouteRule{DomainSuffix: directSuffixes, Outbound: "direct"},
@@ -249,12 +364,21 @@ func hostPrefix(addr netip.Addr) string {
 	return netip.PrefixFrom(addr, addr.BitLen()).String()
 }
 
-func checkGeoRuleSets(paths config.Paths) error {
-	for _, name := range []string{"geoip-ru.srs", "geosite-category-ru.srs"} {
-		path := filepath.Join(paths.GeoDir(), name)
-		if _, err := os.Stat(path); err != nil {
-			return fmt.Errorf("geo rule-set %q is unavailable: %w; run: sudo twarp geo update", path, err)
-		}
+var providerRuleSets = []string{"geosite-google", "geosite-anthropic"}
+
+func routeRuleSets(paths config.Paths, forceProviders bool) ([]singbox.RuleSet, error) {
+	tags := []string{"geoip-ru", "geosite-category-ru"}
+	if forceProviders {
+		tags = append(tags, providerRuleSets...)
 	}
-	return nil
+	sets := make([]singbox.RuleSet, 1, 1+len(tags))
+	sets[0] = singbox.RuleSet{Type: "local", Tag: "gateway-ip", Format: "source", Path: RuleSetPath(paths.RulesDir())}
+	for _, tag := range tags {
+		path := filepath.Join(paths.GeoDir(), tag+".srs")
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("geo rule-set %q is unavailable: %w; run: sudo twarp geo update", path, err)
+		}
+		sets = append(sets, singbox.RuleSet{Type: "local", Tag: tag, Format: "binary", Path: path})
+	}
+	return sets, nil
 }

@@ -11,7 +11,6 @@ import (
 	"golang.org/x/net/idna"
 
 	"github.com/tiptop32/twarp/internal/config"
-	"github.com/tiptop32/twarp/internal/geo"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/state"
@@ -43,8 +42,17 @@ type Routes struct {
 	GeoRuleSets    []string
 	// VPNProtocol is empty when no VPN URI is imported or it does not parse.
 	VPNProtocol string
+	Tunnels     []VPNTunnel
 	// Rules are the route rules in sing-box order; unmatched traffic goes to vpn.
 	Rules []RouteRule
+}
+
+// VPNTunnel describes imported credentials, not network availability.
+type VPNTunnel struct {
+	Name     string
+	Tag      string
+	Protocol string
+	Problem  string
 }
 
 // Routes loads config and gateway state and describes the routing.
@@ -78,9 +86,6 @@ func (s *Service) Routes(ctx context.Context) (Routes, error) {
 	for _, suffix := range render.DirectSuffixes() {
 		routes.DirectSuffixes = append(routes.DirectSuffixes, "."+displayDomain(suffix))
 	}
-	for _, source := range geo.DefaultSources {
-		routes.GeoRuleSets = append(routes.GeoRuleSets, strings.TrimSuffix(source.Name, ".srs"))
-	}
 	secrets, err := config.LoadSecrets(paths.SecretsFile())
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Routes{}, err
@@ -90,11 +95,32 @@ func (s *Service) Routes(ctx context.Context) (Routes, error) {
 			routes.VPNProtocol = vpnProtocol(outbound)
 		}
 	}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		routes.Tunnels = append(routes.Tunnels, describeTunnel(tunnel, secrets.VPNURIs[tunnel.Name]))
+	}
 	for _, rule := range rules {
+		if rule.Outbound == OutboundDirect {
+			routes.GeoRuleSets = append(routes.GeoRuleSets, rule.RuleSet...)
+		}
 		routes.Rules = append(routes.Rules, describeRule(rule, len(prefixes)))
 	}
 	routes.Rules = append(routes.Rules, RouteRule{Match: "everything else", Outbound: OutboundVPN})
 	return routes, nil
+}
+
+func describeTunnel(tunnel config.Tunnel, raw string) VPNTunnel {
+	info := VPNTunnel{Name: tunnel.Name, Tag: tunnel.Tag()}
+	if raw == "" {
+		info.Problem = "not imported"
+	} else if outbound, err := uri.Parse(raw); err != nil {
+		info.Problem = "invalid VPN URI"
+	} else {
+		info.Protocol = vpnProtocol(outbound)
+		if tunnel.Xray != nil {
+			info.Protocol += " via Xray"
+		}
+	}
+	return info
 }
 
 func vpnProtocol(outbound singbox.Outbound) string {
@@ -115,7 +141,13 @@ func describeRule(rule singbox.RouteRule, gatewayCIDRs int) RouteRule {
 	case rule.Action == "hijack-dns":
 		described.Action, described.Match = "hijack-dns", "DNS queries"
 	case len(rule.IPCIDR) > 0:
-		described.Match = "gateway SOCKS " + strings.Join(rule.IPCIDR, ", ")
+		label := "IP CIDRs "
+		if rule.Outbound == OutboundDirect {
+			label = "gateway SOCKS "
+		}
+		described.Match = label + strings.Join(rule.IPCIDR, ", ")
+	case len(rule.ProcessPathRegex) > 0:
+		described.Match = "process paths " + strings.Join(rule.ProcessPathRegex, ", ")
 	case len(rule.DomainSuffix) > 0:
 		names := make([]string, len(rule.DomainSuffix))
 		for index, suffix := range rule.DomainSuffix {

@@ -27,6 +27,8 @@ type renderedFixture struct {
 	clashSecret string
 	gateway     *socksServer
 	vpn         *socksServer
+	direct      *socksServer
+	tunnels     map[string]*socksServer
 }
 
 func newRenderedFixture(t *testing.T) *renderedFixture {
@@ -34,6 +36,16 @@ func newRenderedFixture(t *testing.T) *renderedFixture {
 }
 
 func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int, extraYAML string) *renderedFixture {
+	t.Helper()
+	return newRenderedFixtureWithTunnels(t, vpnProxyPort, extraYAML, "")
+}
+
+func newRenderedFixtureWithTunnels(t *testing.T, vpnProxyPort int, extraYAML, tunnelsYAML string) *renderedFixture {
+	t.Helper()
+	return newRenderedFixtureWithProfiles(t, vpnProxyPort, extraYAML, tunnelsYAML, nil)
+}
+
+func newRenderedFixtureWithProfiles(t *testing.T, vpnProxyPort int, extraYAML, tunnelsYAML string, profiles map[string]string) *renderedFixture {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
@@ -55,8 +67,8 @@ func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int, extraYAML st
 	clashPort := freePort(t)
 	const clashSecret = "twarp-flow-itest"
 	configYAML := fmt.Sprintf(
-		"gateway:\n  socks: 127.0.0.1:%d\n  domains: [intra.example]\n  dns: 127.0.0.1\n  allowed_ranges: [100.64.0.0/10]\ndirect:\n  dns: 127.0.0.1\nvpn:\n  dns: https://127.0.0.1/dns-query\nclash_api: 127.0.0.1:%d\nlog_level: debug\n",
-		gateway.Port(), clashPort,
+		"gateway:\n  socks: 127.0.0.1:%d\n  domains: [intra.example]\n  dns: 127.0.0.1\n  allowed_ranges: [100.64.0.0/10]\ndirect:\n  dns: 127.0.0.1\nvpn:\n  dns: https://127.0.0.1/dns-query\n%sclash_api: 127.0.0.1:%d\nlog_level: debug\n",
+		gateway.Port(), tunnelsYAML, clashPort,
 	)
 	if vpnProxyPort != 0 {
 		configYAML += fmt.Sprintf("vpn_proxy_port: %d\n", vpnProxyPort)
@@ -70,14 +82,35 @@ func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int, extraYAML st
 		t.Fatalf("load twarp config: %v", err)
 	}
 	secrets := syntheticSecrets(t, clashSecret)
+	tunnels := make(map[string]*socksServer, len(cfg.VPN.Tunnels))
+	outbounds := map[string]singbox.Outbound{
+		"gateway": socksOutbound("gateway", gateway.Port()),
+		"vpn":     socksOutbound("vpn", vpn.Port()),
+	}
+	var direct *socksServer
+	if len(cfg.VPN.Tunnels) > 0 {
+		secrets.VPNURIs = make(map[string]string, len(cfg.VPN.Tunnels))
+		if len(profiles) == 0 {
+			// Observe attempts to bypass a failed tunnel without dialing any real destinations.
+			direct = startSOCKSServer(t)
+			outbounds["direct"] = socksOutbound("direct", direct.Port())
+		}
+	}
+	for _, tunnel := range cfg.VPN.Tunnels {
+		if profile, ok := profiles[tunnel.Name]; ok {
+			secrets.VPNURIs[tunnel.Name] = profile
+			continue
+		}
+		stub := startSOCKSServer(t)
+		tunnels[tunnel.Name] = stub
+		outbounds[tunnel.Tag()] = socksOutbound(tunnel.Tag(), stub.Port())
+		secrets.VPNURIs[tunnel.Name] = secrets.VPNURI
+	}
 	configJSON, err := render.Render(cfg, secrets, nil, render.Options{
 		Paths:     config.Paths{Out: out},
 		Inbound:   render.InboundMixed,
 		MixedPort: uint16(mixedPort),
-		Outbounds: map[string]singbox.Outbound{
-			"gateway": socksOutbound("gateway", gateway.Port()),
-			"vpn":     socksOutbound("vpn", vpn.Port()),
-		},
+		Outbounds: outbounds,
 	})
 	if err != nil {
 		t.Fatalf("render flow config: %v", err)
@@ -94,7 +127,7 @@ func newRenderedFixtureWithVPNProxy(t *testing.T, vpnProxyPort int, extraYAML st
 	return &renderedFixture{
 		home: home, out: out, configPath: configPath,
 		mixedPort: mixedPort, clashPort: clashPort, clashSecret: clashSecret,
-		gateway: gateway, vpn: vpn,
+		gateway: gateway, vpn: vpn, direct: direct, tunnels: tunnels,
 	}
 }
 

@@ -16,15 +16,18 @@ type Log struct {
 	Level string `json:"level"`
 }
 
-// Inbound describes a sing-box TUN, mixed or HTTP inbound.
+// Inbound describes a sing-box listener.
 type Inbound struct {
-	Type       string      `json:"type"`
-	Tag        string      `json:"tag"`
-	Address    []string    `json:"address,omitempty"`
-	AutoRoute  bool        `json:"auto_route,omitempty"`
-	Listen     string      `json:"listen,omitempty"`
-	ListenPort uint16      `json:"listen_port,omitempty"`
-	TLS        *InboundTLS `json:"tls,omitempty"`
+	Type            string      `json:"type"`
+	Tag             string      `json:"tag"`
+	Address         []string    `json:"address,omitempty"`
+	AutoRoute       bool        `json:"auto_route,omitempty"`
+	Listen          string      `json:"listen,omitempty"`
+	ListenPort      uint16      `json:"listen_port,omitempty"`
+	TLS             *InboundTLS `json:"tls,omitempty"`
+	Network         string      `json:"network,omitempty"`
+	OverrideAddress string      `json:"override_address,omitempty"`
+	OverridePort    uint16      `json:"override_port,omitempty"`
 }
 
 // InboundTLS configures the HTTPS proxy's server certificate.
@@ -41,6 +44,7 @@ type Outbound struct {
 	Server         string       `json:"server,omitempty"`
 	ServerPort     uint16       `json:"server_port,omitempty"`
 	Version        string       `json:"version,omitempty"`
+	Method         string       `json:"method,omitempty"`
 	Username       string       `json:"username,omitempty"`
 	Password       string       `json:"password,omitempty"`
 	UUID           string       `json:"uuid,omitempty"`
@@ -81,18 +85,20 @@ type DNS struct {
 
 // DNSServer describes one sing-box DNS transport.
 type DNSServer struct {
-	Type   string `json:"type"`
-	Tag    string `json:"tag"`
-	Server string `json:"server,omitempty"`
-	Path   string `json:"path,omitempty"`
-	Detour string `json:"detour,omitempty"`
+	Type       string `json:"type"`
+	Tag        string `json:"tag"`
+	Server     string `json:"server,omitempty"`
+	ServerPort uint16 `json:"server_port,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Detour     string `json:"detour,omitempty"`
 }
 
 // DNSRule selects a DNS server for matching domains or rule-sets.
 type DNSRule struct {
-	DomainSuffix []string `json:"domain_suffix,omitempty"`
-	RuleSet      []string `json:"rule_set,omitempty"`
-	Server       string   `json:"server"`
+	DomainSuffix     []string `json:"domain_suffix,omitempty"`
+	ProcessPathRegex []string `json:"process_path_regex,omitempty"`
+	RuleSet          []string `json:"rule_set,omitempty"`
+	Server           string   `json:"server"`
 }
 
 // Route configures sing-box traffic routing.
@@ -106,13 +112,14 @@ type Route struct {
 
 // RouteRule describes one ordered sing-box route rule.
 type RouteRule struct {
-	Action       string   `json:"action,omitempty"`
-	Protocol     string   `json:"protocol,omitempty"`
-	IPCIDR       []string `json:"ip_cidr,omitempty"`
-	DomainSuffix []string `json:"domain_suffix,omitempty"`
-	RuleSet      []string `json:"rule_set,omitempty"`
-	IPIsPrivate  bool     `json:"ip_is_private,omitempty"`
-	Outbound     string   `json:"outbound,omitempty"`
+	Action           string   `json:"action,omitempty"`
+	Protocol         string   `json:"protocol,omitempty"`
+	IPCIDR           []string `json:"ip_cidr,omitempty"`
+	DomainSuffix     []string `json:"domain_suffix,omitempty"`
+	ProcessPathRegex []string `json:"process_path_regex,omitempty"`
+	RuleSet          []string `json:"rule_set,omitempty"`
+	IPIsPrivate      bool     `json:"ip_is_private,omitempty"`
+	Outbound         string   `json:"outbound,omitempty"`
 
 	Inbound []string `json:"inbound,omitempty"`
 }

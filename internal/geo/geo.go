@@ -28,10 +28,23 @@ type Source struct {
 	URL  string
 }
 
-// DefaultSources are the Russian geo rule-sets used by twarp.
-var DefaultSources = []Source{
+var regionalSources = []Source{
 	{Name: "geoip-ru.srs", URL: "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs"},
 	{Name: "geosite-category-ru.srs", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ru.srs"},
+}
+
+// DefaultSources are all geo and VPN provider rule-sets maintained by twarp.
+var DefaultSources = append(regionalSources,
+	Source{Name: "geosite-google.srs", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google.srs"},
+	Source{Name: "geosite-anthropic.srs", URL: "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-anthropic.srs"},
+)
+
+// RequiredSources lists the rule-sets read by this configuration.
+func RequiredSources(forceProviders bool) []Source {
+	if forceProviders {
+		return DefaultSources
+	}
+	return regionalSources
 }
 
 // Options configures an Update.
