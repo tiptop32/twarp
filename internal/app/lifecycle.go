@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/tiptop32/twarp/internal/config"
@@ -88,7 +89,7 @@ func (s *Service) startResult(ctx context.Context, summary string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("%s, but %w", summary, err)
 	}
-	note, err := s.SyncResolvers(ctx, cfg.Gateway.Domains)
+	note, err := s.SyncResolvers(ctx, cfg)
 	if err != nil {
 		return "", fmt.Errorf("%s, but %w", summary, err)
 	}
@@ -209,11 +210,16 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		release()
 		return "", s.failApply(fmt.Errorf("read installed sing-box config: %w", configReadErr))
 	}
-	if err := xray.CheckPorts(ctx, s.deps.Runner, uid, cfg.VPN.Tunnels); err != nil {
-		release()
-		return "", s.failApply(err)
+	// Gateway refresh must not depend on an optional user process. The
+	// encrypted local hop fails closed even if another job owns its port.
+	if s.actor != ActorDaemonNet {
+		if err := xray.CheckPorts(ctx, s.deps.Runner, uid, cfg.VPN.Tunnels); err != nil {
+			release()
+			return "", s.failApply(err)
+		}
 	}
-	newListeners, err := singbox.CheckLoopbackPorts(ctx, s.deps.Runner, render.LoopbackListeners(cfg), previousConfig)
+	listeners := render.LoopbackListeners(cfg)
+	newListeners, err := singbox.CheckLoopbackPorts(ctx, s.deps.Runner, listeners, previousConfig)
 	if err != nil {
 		release()
 		return "", s.failApply(err)
@@ -280,13 +286,19 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		return "", s.failApply(cause)
 	}
 	result := "kickstarted"
-	if serviceState == sysexec.ServiceRunning {
+	hasXray := slices.ContainsFunc(cfg.VPN.Tunnels, func(tunnel config.Tunnel) bool { return tunnel.Xray != nil })
+	if serviceState == sysexec.ServiceRunning && !hasXray {
 		if err := singbox.Reload(ctx, s.deps.Runner); err != nil {
 			return failAfterPromotion(fmt.Errorf("reload sing-box: %w", err), true)
 		}
 		result = "reloaded"
-	} else if err := sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget()); err != nil {
-		return failAfterPromotion(fmt.Errorf("kickstart sing-box: %w", err), false)
+	} else {
+		if err := sysexec.Kickstart(ctx, s.deps.Runner, sysexec.SystemTarget()); err != nil {
+			return failAfterPromotion(fmt.Errorf("kickstart sing-box: %w", err), false)
+		}
+		// The previous job's ownership of a reused port does not prove readiness
+		// of its replacement after a kickstart.
+		newListeners = listeners
 	}
 	if err := singbox.WaitLoopbackPorts(ctx, s.deps.Runner, sysexec.SystemTarget(), newListeners); err != nil {
 		_, failure := failAfterPromotion(err, false)
@@ -296,7 +308,7 @@ func (s *Service) Apply(ctx context.Context) (string, error) {
 		return "", failure
 	}
 	release()
-	note, resolverErr := s.SyncResolvers(ctx, cfg.Gateway.Domains)
+	note, resolverErr := s.SyncResolvers(ctx, cfg)
 	if resolverErr != nil {
 		return "", s.failApply(fmt.Errorf("applied and %s sing-box, but %w", result, resolverErr))
 	}

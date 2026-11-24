@@ -8,11 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/fsutil"
 	"github.com/tiptop32/twarp/internal/launchd"
-	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/sysexec"
 	"github.com/tiptop32/twarp/internal/uri"
 	"github.com/tiptop32/twarp/internal/xray"
@@ -25,24 +25,25 @@ func (s *Service) InstallXray(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	paths, err := config.Resolve(s.deps.Sys)
+	release, err := s.lockXrayJob(job)
 	if err != nil {
 		return err
 	}
-	cfg, err := config.Load(paths.ConfigFile())
+	defer release()
+	cfg, err := config.Load(job.paths.ConfigFile())
 	if err != nil {
 		return err
 	}
 	for _, tunnel := range cfg.VPN.Tunnels {
 		if tunnel.Name == name && tunnel.Xray != nil {
-			return s.installXray(ctx, job, paths, tunnel)
+			return s.installXray(ctx, job, tunnel)
 		}
 	}
 	return fmt.Errorf("VPN tunnel %q has no xray configuration", name)
 }
 
-func (s *Service) installXray(ctx context.Context, job xrayJob, paths config.Paths, tunnel config.Tunnel) error {
-	secrets, err := config.LoadSecrets(paths.SecretsFile())
+func (s *Service) installXray(ctx context.Context, job xrayJob, tunnel config.Tunnel) error {
+	secrets, err := config.LoadSecrets(job.paths.SecretsFile())
 	if err != nil {
 		return err
 	}
@@ -73,11 +74,6 @@ func (s *Service) installXray(ctx context.Context, job xrayJob, paths config.Pat
 	if err != nil {
 		return err
 	}
-	release, err := s.lockXrayJob(job)
-	if err != nil {
-		return err
-	}
-	defer release()
 	if err := s.deps.FS.MkdirAll(filepath.Dir(job.plist), 0o755); err != nil {
 		return err
 	}
@@ -120,20 +116,24 @@ func (s *Service) activateXray(ctx context.Context, job xrayJob, loaded bool, da
 	}
 	err = sysexec.Bootstrap(ctx, s.deps.Runner, job.domain, job.plist)
 	if err == nil {
-		listener := singbox.LoopbackListener{Port: port, Field: "Xray loopback listener"}
-		err = singbox.WaitLoopbackPorts(ctx, s.deps.Runner, job.target, []singbox.LoopbackListener{listener})
+		err = xray.WaitReady(ctx, s.deps.Runner, job.target, port)
 		if err == nil {
 			return nil
 		}
-		if stopErr := sysexec.Bootout(ctx, s.deps.Runner, job.target); stopErr != nil {
-			return restore(errors.Join(fmt.Errorf("%w; see %s", err, job.log), stopErr))
-		}
 	}
-	err = restore(fmt.Errorf("start Xray login agent: %w; see %s", err, job.log))
-	if loaded {
-		err = errors.Join(err, sysexec.Bootstrap(ctx, s.deps.Runner, job.domain, job.plist))
+	// The caller may have cancelled after the old agent was unloaded. Give
+	// launchd a separate budget to remove a partial job and load the old one.
+	recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), sysexec.BootoutTimeout+5*time.Second)
+	defer cancel()
+	if stopErr := sysexec.Bootout(recovery, s.deps.Runner, job.target); stopErr != nil {
+		return restore(errors.Join(fmt.Errorf("start Xray login agent: %w; see %s", err, job.log), stopErr))
 	}
-	return err
+	cause := fmt.Errorf("start Xray login agent: %w; see %s", err, job.log)
+	restoreErr := restore(nil)
+	if loaded && restoreErr == nil {
+		return errors.Join(cause, sysexec.Bootstrap(recovery, s.deps.Runner, job.domain, job.plist))
+	}
+	return errors.Join(cause, restoreErr)
 }
 
 // UninstallXray stops the named login agent and removes its generated files.
@@ -181,6 +181,7 @@ func (s *Service) restoreXrayFile(path string, data []byte) error {
 
 type xrayJob struct {
 	label, domain, target, plist, config, log string
+	paths                                     config.Paths
 }
 
 func (s *Service) xrayJob(name string) (xrayJob, error) {
@@ -203,6 +204,7 @@ func (s *Service) xrayJob(name string) (xrayJob, error) {
 	private := filepath.Join(paths.Home, "xray")
 	return xrayJob{
 		label: label, domain: domain, target: domain + "/" + label,
+		paths:  paths,
 		plist:  filepath.Join(home, "Library", "LaunchAgents", label+".plist"),
 		config: filepath.Join(private, name+".json"), log: filepath.Join(private, name+".log"),
 	}, nil

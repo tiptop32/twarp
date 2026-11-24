@@ -57,7 +57,7 @@ from pathlib import Path
 import sys
 
 out_dir, audit_path, stdout_path, stderr_path = map(Path, sys.argv[1:])
-names = ("geoip-ru.srs", "geosite-category-ru.srs")
+names = ("geoip-ru.srs", "geosite-category-ru.srs", "geosite-google.srs", "geosite-anthropic.srs")
 for name in names:
     path = out_dir / "geo" / name
     data = path.read_bytes()
@@ -77,7 +77,7 @@ records = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").s
 if not records or records[-1].get("op") != "geo_update" or records[-1].get("result") != "ok":
     raise SystemExit("eval: root audit has no successful geo_update record")
 if sorted(file.get("name") for file in records[-1].get("files", [])) != sorted(names):
-    raise SystemExit("eval: root audit does not list both geo rule-sets")
+    raise SystemExit("eval: root audit does not list all geo rule-sets")
 PY
 
 echo "PASS: root geo update completed without SUDO_USER and honored TWARP_OUT"

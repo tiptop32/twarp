@@ -3,18 +3,26 @@ package app
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/resolver"
 )
 
-// SyncResolvers sends system DNS for the gateway domains to sing-box. It
-// returns a note for the summary when some domains keep a resolver file that
-// twarp does not own.
-func (s *Service) SyncResolvers(ctx context.Context, domains []string) (string, error) {
+// SyncResolvers sends system DNS for gateway and named VPN domains to sing-box.
+// Files owned by another tool are left in place and listed in the summary.
+func (s *Service) SyncResolvers(ctx context.Context, cfg config.Config) (string, error) {
 	if s.deps.ResolverDir == "" {
 		return "", nil
+	}
+	domains := cfg.Gateway.Domains
+	if len(cfg.VPN.Tunnels) != 0 {
+		domains = slices.Clone(domains)
+		for _, tunnel := range cfg.VPN.Tunnels {
+			domains = append(domains, tunnel.Domains...)
+		}
 	}
 	result, err := resolver.Sync(s.deps.ResolverDir, domains, render.TUNDNS)
 	if result.Changed {
@@ -29,8 +37,8 @@ func (s *Service) SyncResolvers(ctx context.Context, domains []string) (string, 
 	return fmt.Sprintf("\nnot managed by twarp, left as is in %s: %s", s.deps.ResolverDir, strings.Join(result.Foreign, ", ")), nil
 }
 
-// RemoveResolvers removes the resolver files written by twarp, so gateway
-// domains resolve through the network again while the tunnel is down.
+// RemoveResolvers removes twarp's resolver files so their domains use system
+// DNS when the tunnel is down.
 func (s *Service) RemoveResolvers(ctx context.Context) error {
 	if s.deps.ResolverDir == "" {
 		return nil

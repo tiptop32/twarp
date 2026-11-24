@@ -21,6 +21,7 @@ import (
 	"github.com/tiptop32/twarp/internal/state"
 	"github.com/tiptop32/twarp/internal/sysexec"
 	"github.com/tiptop32/twarp/internal/uri"
+	"github.com/tiptop32/twarp/internal/xray"
 )
 
 const (
@@ -163,14 +164,13 @@ func (s *Service) checkAdditionalVPNs(ctx context.Context, status *Status, cfg c
 
 func (s *Service) checkXray(ctx context.Context, status *Status, cfg config.Config, secrets config.Secrets, tunnel config.Tunnel, network bool) {
 	tag := tunnel.Tag()
-	job, err := s.xrayJob(tunnel.Name)
-	if err != nil || s.deps.Runner == nil {
+	if s.isRoot() || s.deps.Runner == nil {
 		status.add(LevelWarn, tag, "Xray listener can only be checked from the owner’s login session")
 		return
 	}
-	address := netip.AddrPortFrom(netip.MustParseAddr(singbox.VPNProxyListen), tunnel.Xray.Listen)
+	target := sysexec.GUIDomain(s.deps.Sys.Geteuid()) + "/" + xray.AgentLabel(tunnel.Name)
 	probe, cancel := context.WithTimeout(ctx, statusProbeTimeout)
-	owned := sysexec.OwnsTCPListener(probe, s.deps.Runner, job.target, address.String())
+	owned := xray.OwnsPort(probe, s.deps.Runner, target, tunnel.Xray.Listen)
 	cancel()
 	if ctx.Err() != nil {
 		status.add(LevelWarn, tag, "Xray status probe budget exhausted")
@@ -187,7 +187,7 @@ func (s *Service) checkXray(ctx context.Context, status *Status, cfg config.Conf
 	probe, cancel = context.WithTimeout(ctx, egressProbeTimeout)
 	defer cancel()
 	clash := singbox.Clash{Addr: cfg.ClashAPI, Secret: secrets.ClashSecret, Client: s.deps.HTTPClient}
-	err = clash.ProbeXray(probe, tag)
+	err := clash.ProbeXray(probe, tag)
 	if ctx.Err() != nil {
 		status.add(LevelWarn, tag, "Xray status probe budget exhausted")
 		return

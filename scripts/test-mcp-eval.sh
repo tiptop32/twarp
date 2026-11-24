@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ((EUID == 0)); then
+  echo 'MCP eval runner integration requires an unprivileged user; skipped'
+  exit 0
+fi
+
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/twarp-mcp-runner-test.XXXXXX")"
 mkdir -m 700 "$work/agent"
@@ -23,6 +28,9 @@ assert args[args.index('--trusted-extension') + 1].endswith('/evals/mcp_tool_cho
 assert all(flag in args for flag in ("--no-session", "--no-skills", "--no-rules", "--no-context-files"))
 assert 'claude' in pathlib.Path(args[args.index('--config') + 1]).read_text()
 assert os.environ.get('CLAUDE_CONFIG_DIR') is None and os.environ.get('PI_CONFIG_FILES') is None
+assert not any(os.environ.get(name) for name in ('OMP_AUTH_BROKER_URL', 'OMP_AUTH_BROKER_TOKEN', 'OMP_AUTH_BROKER_SNAPSHOT_CACHE'))
+agent = pathlib.Path(os.environ['PI_CODING_AGENT_DIR'])
+assert not (agent / 'config.yml').is_file() and not (agent / 'config.yaml').is_file()
 assert pathlib.Path(os.path.realpath(os.environ['HOME'])).parent == pathlib.Path(os.getcwd()).parent
 assert os.environ['PI_CONFIG_DIR'] == '.omp-eval'
 config = json.loads(pathlib.Path('.omp/mcp.json').read_text())
@@ -41,7 +49,8 @@ if os.environ.get('TEST_NO_RESTRICTION') != '1':
 print(answer)
 PY
 chmod +x "$work/omp"
-PI_CODING_AGENT_DIR="$work/agent" TWARP_EVAL_REPORT_DIR="$work/reports" PATH="$work:$PATH" "$root/evals/mcp_tool_choice/run.sh" --case add-single >/dev/null
+printf 'auth: {broker: {url: "https://broker.example", token: "synthetic"}}\n' >"$work/agent/config.yml"
+OMP_AUTH_BROKER_URL='https://broker.example' OMP_AUTH_BROKER_TOKEN=synthetic PI_CODING_AGENT_DIR="$work/agent" TWARP_EVAL_REPORT_DIR="$work/reports" PATH="$work:$PATH" "$root/evals/mcp_tool_choice/run.sh" --case add-single >/dev/null
 if TEST_OMIT_MUTATION=1 PI_CODING_AGENT_DIR="$work/agent" TWARP_EVAL_REPORT_DIR="$work/reports" PATH="$work:$PATH" "$root/evals/mcp_tool_choice/run.sh" --case add-single >/dev/null; then
   echo 'MCP eval runner accepted unchanged state' >&2
   exit 1

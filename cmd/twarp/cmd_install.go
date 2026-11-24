@@ -69,7 +69,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if err := launchd.Install(context.Background(), deps.launchd(), options); err != nil {
 		return lifecycleError("install", stderr, err)
 	}
-	note, err := deps.app(app.ActorCLI).SyncResolvers(context.Background(), cfg.Gateway.Domains)
+	note, err := deps.app(app.ActorCLI).SyncResolvers(context.Background(), cfg)
 	if err != nil {
 		return lifecycleError("install", stderr, fmt.Errorf("services installed, but %w", err))
 	}

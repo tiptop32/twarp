@@ -1,10 +1,12 @@
 package xray_test
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/sysexec"
@@ -43,5 +45,28 @@ func TestCheckPortsRejectsForeignTCPAndUDPListeners(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestWaitReadyRejectsTCPOnlyJob(t *testing.T) {
+	const target = "gui/501/dev.twarp.xray-vpn2"
+	const pid = "1234"
+	printJob := sysexec.ExpectedCall{
+		Call:     sysexec.Call{Name: "launchctl", Args: []string{"print", target}},
+		Response: sysexec.Response{Output: []byte("pid = " + pid + "\n")},
+	}
+	runner := &sysexec.Fake{Expect: []sysexec.ExpectedCall{
+		printJob,
+		{Call: sysexec.Call{Name: "/usr/sbin/lsof", Args: []string{"-nP", "-t", "-a", "-p", pid, "-iTCP@127.0.0.1:19080", "-sTCP:LISTEN"}}, Response: sysexec.Response{Output: []byte(pid)}},
+		printJob,
+		{Call: sysexec.Call{Name: "/usr/sbin/lsof", Args: []string{"-nP", "-t", "-a", "-p", pid, "-iUDP@127.0.0.1:19080"}}, Response: sysexec.Response{Err: errors.New("no UDP socket")}},
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	if err := xray.WaitReady(ctx, runner, target, 19080); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("TCP-only job reported ready: %v", err)
+	}
+	if err := runner.Verify(); err != nil {
+		t.Fatal(err)
 	}
 }

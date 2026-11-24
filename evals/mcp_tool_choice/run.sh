@@ -59,11 +59,6 @@ if [[ $DRY_RUN == false ]]; then
 fi
 agent_dir="$WORK/agent"
 mkdir -m 700 "$agent_dir"
-for config_name in config.yml config.yaml; do
-  if [[ -n $agent_source && -f "$agent_source/$config_name" ]]; then
-    ln -s "$agent_source/$config_name" "$agent_dir/$config_name"
-  fi
-done
 for models_name in models.yml models.yaml; do
   if [[ -n $agent_source && -f "$agent_source/$models_name" ]]; then
     if [[ -z ${AGENT_LB_API_KEY:-} ]]; then
@@ -303,7 +298,7 @@ PY
   fi
 
   # Never pass the remaining case rows on stdin or expose the repository.
-  if (cd "$case_dir" && unset CLAUDE_CONFIG_DIR PI_CONFIG_FILES XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME XDG_CACHE_HOME OMP_AUTH_BROKER_SNAPSHOT_CACHE && HOME="$eval_home" OMP_COMPLETION_RUNTIME="$completion_runtime" PI_CONFIG_DIR=.omp-eval PI_CODING_AGENT_DIR="$agent_dir" OMP_PROFILE=default PI_PROFILE=default OMP_MCP_REQUIRE_READY=1 run_with_timeout "${omp_cmd[@]}" </dev/null >"$stdout_file" 2>"$stderr_file"); then
+  if (cd "$case_dir" && unset CLAUDE_CONFIG_DIR PI_CONFIG_FILES XDG_DATA_HOME XDG_CONFIG_HOME XDG_STATE_HOME XDG_CACHE_HOME OMP_AUTH_BROKER_SNAPSHOT_CACHE OMP_AUTH_BROKER_URL OMP_AUTH_BROKER_TOKEN && HOME="$eval_home" OMP_COMPLETION_RUNTIME="$completion_runtime" PI_CONFIG_DIR=.omp-eval PI_CODING_AGENT_DIR="$agent_dir" OMP_PROFILE=default PI_PROFILE=default OMP_MCP_REQUIRE_READY=1 run_with_timeout "${omp_cmd[@]}" </dev/null >"$stdout_file" 2>"$stderr_file"); then
     omp_status=0
   else
     omp_status=$?

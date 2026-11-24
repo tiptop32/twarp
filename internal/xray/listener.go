@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
 	"github.com/tiptop32/twarp/internal/singbox"
@@ -31,7 +32,7 @@ func CheckPorts(ctx context.Context, runner sysexec.Runner, uid int, tunnels []c
 
 // CheckPort accepts a free loopback port or one already owned by this job.
 func CheckPort(ctx context.Context, runner sysexec.Runner, target string, port uint16) error {
-	address := net.JoinHostPort(singbox.VPNProxyListen, strconv.Itoa(int(port)))
+	address := loopbackAddress(port)
 	network := net.ListenConfig{}
 	if tcp, err := network.Listen(ctx, "tcp4", address); err == nil {
 		if err := tcp.Close(); err != nil {
@@ -46,4 +47,30 @@ func CheckPort(ctx context.Context, runner sysexec.Runner, target string, port u
 		return fmt.Errorf("cannot bind Xray listen_port %s/udp: %w", address, err)
 	}
 	return nil
+}
+
+// OwnsPort reports whether the job owns both sockets needed by Xray.
+func OwnsPort(ctx context.Context, runner sysexec.Runner, target string, port uint16) bool {
+	address := loopbackAddress(port)
+	return sysexec.OwnsTCPListener(ctx, runner, target, address) && sysexec.OwnsUDPListener(ctx, runner, target, address)
+}
+
+// WaitReady waits for both sockets, not just launchd's running state.
+func WaitReady(ctx context.Context, runner sysexec.Runner, target string, port uint16) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for !OwnsPort(ctx, runner, target, port) {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s did not start TCP and UDP listeners at %s: %w", target, loopbackAddress(port), ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
+func loopbackAddress(port uint16) string {
+	return net.JoinHostPort(singbox.VPNProxyListen, strconv.Itoa(int(port)))
 }
