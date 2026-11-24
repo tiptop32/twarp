@@ -348,6 +348,70 @@ func TestRunApplyFailedReloadRestoresInstalledFiles(t *testing.T) {
 	}
 }
 
+func TestApplyCancellationRestartsRestoredConfig(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 0)
+	configPath := filepath.Join(fixture.out, "config.json")
+	const previous = "working config\n"
+	if err := os.WriteFile(configPath, []byte(previous), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(fixture.home, "twarp.yaml")
+	yaml, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, fmt.Appendf(yaml, "\nvpn_proxy_port: %d\n", port), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runner := &cancelApplyRunner{cancel: cancel, configPath: configPath}
+	fixture.deps.Runner = runner
+	fixture.deps.FS = &cliFakeFS{}
+	_, err = fixture.deps.app("cli").Apply(ctx)
+	if !errors.Is(err, context.Canceled) || runner.kickstarts != 2 || runner.restartedWith != previous {
+		t.Fatalf("apply error = %v; kickstarts = %d; recovered config = %q", err, runner.kickstarts, runner.restartedWith)
+	}
+}
+
+type cancelApplyRunner struct {
+	cancel        context.CancelFunc
+	configPath    string
+	kickstarts    int
+	restartedWith string
+}
+
+func (r *cancelApplyRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	switch {
+	case name == "/test/sing-box" && args[0] == "check":
+		return nil, nil
+	case name == "launchctl" && args[0] == "print":
+		return []byte("state = not running\n"), nil
+	case name == "launchctl" && args[0] == "kickstart":
+		r.kickstarts++
+		if r.kickstarts == 1 {
+			r.cancel()
+			return nil, nil
+		}
+		data, err := os.ReadFile(r.configPath)
+		r.restartedWith = string(data)
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unexpected command %s %v", name, args)
+	}
+}
+
 type rejectCandidateRunner struct {
 	singBox          string
 	installedPath    string
