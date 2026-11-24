@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestRunGatewayAuthStoresCredentialsFromStdin(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := config.Secrets{VPNURI: "kept", ClashSecret: "kept-secret", GatewaySocksUser: "proxy", GatewaySocksPassword: syntheticGatewayPassword}
-	if secrets != want {
+	if !reflect.DeepEqual(secrets, want) {
 		t.Errorf("secrets = %+v, want %+v", secrets, want)
 	}
 	if info, err := os.Stat(secretsPath); err != nil || info.Mode().Perm() != 0o600 {

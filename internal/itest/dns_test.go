@@ -22,7 +22,7 @@ func TestRenderedDNSRoutingUsesSelectedStub(t *testing.T) {
 		"remote":  {network: "udp", port: remote.Port()},
 	})
 	dnsPort := freeUDPPort(t)
-	patchDirectDNSInbound(t, fixture.configPath, dnsPort)
+	patchDirectDNSInbound(t, fixture.configPath, dnsPort, false)
 	_ = startSingBoxWithConfig(t, fixture.configPath, 0, fixture.clashPort, fixture.clashSecret)
 
 	tests := []struct {

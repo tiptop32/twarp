@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -51,6 +52,31 @@ func (c Clash) Version(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return response.Version, nil
+}
+
+// ProbeXray checks the running transport before probing HTTPS through it. An
+// old VLESS config with the same tag is not accepted.
+func (c Clash) ProbeXray(ctx context.Context, tag string) error {
+	path := "/proxies/" + url.PathEscape(tag)
+	var proxy struct {
+		Type string `json:"type"`
+	}
+	if err := c.get(ctx, path, &proxy); err != nil {
+		return err
+	}
+	if proxy.Type != "Shadowsocks" {
+		return fmt.Errorf("%s is not loaded as a Shadowsocks outbound; run twarp apply", tag)
+	}
+	var response struct {
+		Delay uint16 `json:"delay"`
+	}
+	if err := c.get(ctx, path+"/delay?timeout=4000", &response); err != nil {
+		return err
+	}
+	if response.Delay == 0 {
+		return errors.New("clash API returned no outbound delay")
+	}
+	return nil
 }
 
 // Connections returns the active connections known to sing-box.

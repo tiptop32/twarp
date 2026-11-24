@@ -15,6 +15,7 @@ import (
 	"github.com/tiptop32/twarp/internal/render"
 	"github.com/tiptop32/twarp/internal/singbox"
 	"github.com/tiptop32/twarp/internal/sysexec"
+	"github.com/tiptop32/twarp/internal/xray"
 )
 
 // FS isolates filesystem changes made by Install and Uninstall.
@@ -149,7 +150,7 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 		return fmt.Errorf("give rule-set directory to sudo user: %w", err)
 	}
 
-	missingGeo, err := geoFilesMissing(deps.FS, options.Paths.GeoDir())
+	missingGeo, err := geoFilesMissing(deps.FS, options.Paths.GeoDir(), options.Config.VPN.ForceProviderDomains)
 	if err != nil {
 		return err
 	}
@@ -179,7 +180,11 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	if configReadErr != nil && !errors.Is(configReadErr, os.ErrNotExist) {
 		return fmt.Errorf("read installed sing-box config: %w", configReadErr)
 	}
-	if _, err := singbox.CheckVPNProxyPort(ctx, deps.Runner, options.Config.VPNProxy, previousConfig); err != nil {
+	if err := xray.CheckPorts(ctx, deps.Runner, uid, options.Config.VPN.Tunnels); err != nil {
+		return err
+	}
+	listeners := render.LoopbackListeners(options.Config)
+	if _, err := singbox.CheckLoopbackPorts(ctx, deps.Runner, listeners, previousConfig); err != nil {
 		return err
 	}
 	restoreRuleSet := func(cause error) error {
@@ -270,7 +275,7 @@ func Install(ctx context.Context, deps Deps, options Options) error {
 	if err := sysexec.Bootstrap(ctx, deps.Runner, "system", SingBoxPlistPath); err != nil {
 		return failAfterPromotion(fmt.Errorf("load sing-box service: %w", err))
 	}
-	if err := singbox.WaitVPNProxy(ctx, deps.Runner, options.Config.VPNProxy); err != nil {
+	if err := singbox.WaitLoopbackPorts(ctx, deps.Runner, sysexec.SystemTarget(), listeners); err != nil {
 		failure := failAfterPromotion(err)
 		if bootoutErr := sysexec.Bootout(ctx, deps.Runner, sysexec.SystemTarget()); bootoutErr != nil {
 			return errors.Join(failure, fmt.Errorf("unload failed sing-box config: %w", bootoutErr))
@@ -324,8 +329,8 @@ func Uninstall(ctx context.Context, deps Deps) error {
 	return errors.Join(uninstallErrors...)
 }
 
-func geoFilesMissing(filesystem FS, directory string) (bool, error) {
-	for _, source := range geo.DefaultSources {
+func geoFilesMissing(filesystem FS, directory string, forceProviders bool) (bool, error) {
+	for _, source := range geo.RequiredSources(forceProviders) {
 		path := filepath.Join(directory, source.Name)
 		if _, err := filesystem.Stat(path); errors.Is(err, os.ErrNotExist) {
 			return true, nil

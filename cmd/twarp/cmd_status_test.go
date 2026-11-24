@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/tiptop32/twarp/internal/config"
-	"github.com/tiptop32/twarp/internal/geo"
 	"github.com/tiptop32/twarp/internal/ipc"
 	"github.com/tiptop32/twarp/internal/socksprobe"
 	"github.com/tiptop32/twarp/internal/sysexec"
@@ -207,8 +206,8 @@ func TestRunStatusNetComparesEgressWithVPNServer(t *testing.T) {
 		serverIP string
 		want     string
 	}{
-		{name: "same", serverIP: "203.0.113.9", want: "OK   egress: egress via vpn 203.0.113.9"},
-		{name: "different", serverIP: "198.51.100.7", want: "WARN egress: egress 203.0.113.9 differs from vpn server 198.51.100.7 (destination may be routed direct)"},
+		{name: "same", serverIP: "203.0.113.9", want: "OK   egress: egress IP matches primary vpn server: 203.0.113.9"},
+		{name: "different", serverIP: "198.51.100.7", want: "WARN egress: egress 203.0.113.9 differs from primary vpn server 198.51.100.7 (the probe may use another route)"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newStatusFixture(t, http.StatusOK)
@@ -305,8 +304,8 @@ func newStatusFixture(t *testing.T, clashStatus int) statusFixture {
 	if err := os.WriteFile(filepath.Join(home, "gateway-ips.json"), []byte(`{"version":1,"cidrs":[{"cidr":"100.64.10.0/24","comment":"test","added_by":"cli","added_at":"2026-10-03T00:00:00Z"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, source := range geo.DefaultSources {
-		path := filepath.Join(geoDir, source.Name)
+	for _, name := range []string{"geoip-ru.srs", "geosite-category-ru.srs"} {
+		path := filepath.Join(geoDir, name)
 		if err := os.WriteFile(path, []byte("SRS"), 0o644); err != nil {
 			t.Fatal(err)
 		}

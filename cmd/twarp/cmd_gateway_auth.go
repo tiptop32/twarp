@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/tiptop32/twarp/internal/config"
@@ -34,35 +33,25 @@ func runGatewayAuth(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		_, _ = fmt.Fprintf(stderr, "twarp gateway auth: %v\n", err)
 		return 1
 	}
-	secrets, err := config.LoadSecrets(paths.SecretsFile())
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		_, _ = fmt.Fprintf(stderr, "twarp gateway auth: %v\n", err)
-		return 1
-	}
-
-	if *clearAuth {
-		secrets.GatewaySocksUser, secrets.GatewaySocksPassword = "", ""
-	} else {
-		user, password, err := readGatewayCredentials(deps.Stdin)
+	var user, password string
+	if !*clearAuth {
+		user, password, err = readGatewayCredentials(deps.Stdin)
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "twarp gateway auth: %v\n", err)
 			return 1
 		}
+	}
+	if err := config.UpdateSecrets(paths.SecretsFile(), func(secrets *config.Secrets) error {
 		secrets.GatewaySocksUser, secrets.GatewaySocksPassword = user, password
-	}
-
-	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
-		_, _ = fmt.Fprintf(stderr, "twarp gateway auth: create home: %v\n", err)
-		return 1
-	}
-	if err := config.SaveSecrets(paths.SecretsFile(), secrets); err != nil {
+		return nil
+	}); err != nil {
 		_, _ = fmt.Fprintf(stderr, "twarp gateway auth: %v\n", err)
 		return 1
 	}
 	if *clearAuth {
 		_, _ = fmt.Fprintln(stdout, "removed gateway SOCKS credentials; apply them: twarp apply")
 	} else {
-		_, _ = fmt.Fprintf(stdout, "saved gateway SOCKS credentials for user %s; apply them: twarp apply\n", secrets.GatewaySocksUser)
+		_, _ = fmt.Fprintf(stdout, "saved gateway SOCKS credentials for user %s; apply them: twarp apply\n", user)
 	}
 	return 0
 }

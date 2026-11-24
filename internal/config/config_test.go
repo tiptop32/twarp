@@ -156,7 +156,7 @@ func TestSecretsRejectLoosePermissionsAndRoundTripAt0600(t *testing.T) {
 		t.Fatalf("LoadSecrets() error leaks a secret: %q", err)
 	}
 
-	want := config.Secrets{VPNURI: "vless://synthetic", ClashSecret: "synthetic-secret"}
+	want := config.Secrets{VPNURI: "vless://synthetic", ClashSecret: "synthetic-secret", VPNURIs: map[string]string{"second": "vless://synthetic-secondary"}}
 	path := filepath.Join(dir, "secrets.yaml")
 	if err := config.SaveSecrets(path, want); err != nil {
 		t.Fatalf("SaveSecrets() error = %v", err)
@@ -172,7 +172,7 @@ func TestSecretsRejectLoosePermissionsAndRoundTripAt0600(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSecrets(saved file) error = %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("LoadSecrets(saved file) = %#v, want %#v", got, want)
 	}
 }
@@ -211,7 +211,7 @@ func TestSecretsGatewayAuthMustBeAPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := config.LoadSecrets(path)
-	if err != nil || got != want || !got.HasGatewayAuth() {
+	if err != nil || !reflect.DeepEqual(got, want) || !got.HasGatewayAuth() {
 		t.Fatalf("LoadSecrets() = %+v, %v; want %+v", got, err, want)
 	}
 	if err := config.ValidateGatewayAuth("", ""); err != nil {
@@ -228,5 +228,52 @@ func TestLoadAcceptsGatewaySOCKSHostNames(t *testing.T) {
 		if err != nil || cfg.Gateway.Socks != address {
 			t.Fatalf("Load(%s) = (%q, %v), want accepted as is", address, cfg.Gateway.Socks, err)
 		}
+	}
+}
+
+func TestLoadAdditionalVPNs(t *testing.T) {
+	t.Parallel()
+	const prefix = "vpn:\n  tunnels:\n"
+	const first = "    - name: second\n      domains: [.ПРИМЕР.РФ]\n      cidrs: [192.0.2.23/24]\n"
+	cfg, err := config.Load(writeFile(t, "twarp.yaml", 0o600, validConfig()+prefix+first+"    - name: third\n      process_path_regex: ['^/bin/example$']\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.Tunnel{
+		{Name: "second", DNS: "https://1.1.1.1/dns-query", Domains: []string{"xn--e1afmkfd.xn--p1ai"}, CIDRs: []string{"192.0.2.0/24"}},
+		{Name: "third", DNS: "https://1.1.1.1/dns-query", Domains: []string{}, ProcessPathRegex: []string{"^/bin/example$"}},
+	}
+	if !reflect.DeepEqual(cfg.VPN.Tunnels, want) {
+		t.Fatalf("tunnels = %#v, want %#v", cfg.VPN.Tunnels, want)
+	}
+	for _, tc := range []struct{ name, body, message string }{
+		{"duplicate", first + first, "duplicate tunnel name"},
+		{"name", "    - name: example.invalid\n", ".name"},
+		{"no selectors", "    - name: second\n", "traffic selector"},
+		{"default route", "    - name: second\n      cidrs: ['::/0']\n", ".cidrs"},
+		{"regex", "    - name: second\n      process_path_regex: ['[']\n", ".process_path_regex"},
+		{"dns", first + "      dns: http://example.test\n", ".dns"},
+		{"unknown", first + "      domain: example.test\n", "field domain not found"},
+		{"Xray ports missing", first + "      xray: {listen_port: 19080}\n", "xray.bridge_port must be a port"},
+		{"Xray ports overlap", first + "      xray: {listen_port: 19080, bridge_port: 19080}\n", "xray.bridge_port conflicts"},
+		{"Xray overlaps Clash API", first + "      xray: {listen_port: 9090, bridge_port: 19081}\n", "conflicts with clash_api"},
+		{"Xray case alias", strings.Replace(first, "name: second", "name: Second", 1) + "      xray: {listen_port: 19080, bridge_port: 19081}\n", "requires a lowercase tunnel name"},
+		{"Xray overlaps another tunnel", first + "      xray: {listen_port: 19080, bridge_port: 19081}\n    - name: third\n      domains: [example.test]\n      xray: {listen_port: 19081, bridge_port: 19082}\n", "vpn.tunnels.second.xray.bridge_port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load(writeFile(t, "twarp.yaml", 0o600, validConfig()+prefix+tc.body))
+			if err == nil || !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("error = %v, want %q", err, tc.message)
+			}
+		})
+	}
+}
+
+func TestLoadSecretsRedactsMalformedNamedCredentials(t *testing.T) {
+	t.Parallel()
+	const marker = "vless://synthetic-private-key-marker"
+	path := writeFile(t, "secrets.yaml", 0o600, "vpn_uris:\n  "+marker+": a\n  "+marker+": b\n")
+	if _, err := config.LoadSecrets(path); err == nil || strings.Contains(err.Error(), marker) {
+		t.Fatal("expected a redacted error for duplicate YAML keys")
 	}
 }

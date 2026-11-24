@@ -153,3 +153,33 @@ func Enable(ctx context.Context, runner Runner, target string) error {
 	_, err := runner.Run(ctx, "launchctl", "enable", target)
 	return err
 }
+
+// OwnsTCPListener verifies the TCP socket against the launchd job's PID.
+func OwnsTCPListener(ctx context.Context, runner Runner, target, addr string) bool {
+	return ownsListener(ctx, runner, target, "-iTCP@"+addr, "-sTCP:LISTEN")
+}
+
+// OwnsUDPListener verifies the UDP socket against the launchd job's PID.
+func OwnsUDPListener(ctx context.Context, runner Runner, target, addr string) bool {
+	return ownsListener(ctx, runner, target, "-iUDP@"+addr)
+}
+
+func ownsListener(ctx context.Context, runner Runner, target string, selection ...string) bool {
+	status, err := runner.Run(ctx, "launchctl", "print", target)
+	if err != nil {
+		return false
+	}
+	for line := range strings.SplitSeq(string(status), "\n") {
+		pid, ok := strings.CutPrefix(strings.TrimSpace(line), "pid = ")
+		if !ok {
+			continue
+		}
+		if value, err := strconv.Atoi(pid); err != nil || value <= 1 {
+			return false
+		}
+		args := append([]string{"-nP", "-t", "-a", "-p", pid}, selection...)
+		output, err := runner.Run(ctx, "/usr/sbin/lsof", args...)
+		return err == nil && strings.TrimSpace(string(output)) == pid
+	}
+	return false
+}

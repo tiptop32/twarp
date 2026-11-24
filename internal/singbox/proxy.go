@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/tiptop32/twarp/internal/sysexec"
@@ -19,46 +18,68 @@ const (
 	VPNProxyListen = "127.0.0.1"
 )
 
-// CheckVPNProxyPort checks that a new listener can bind, or that the installed
-// sing-box already owns the requested port. It reports whether it is reused.
-func CheckVPNProxyPort(ctx context.Context, runner sysexec.Runner, port uint16, previous []byte) (bool, error) {
-	if port == 0 {
-		return false, nil
-	}
-	addr := proxyAddress(port)
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp4", addr)
-	if err == nil {
-		return false, listener.Close()
-	}
-
-	var cfg struct{ Inbounds []Inbound }
-	if json.Unmarshal(previous, &cfg) == nil {
-		for _, inbound := range cfg.Inbounds {
-			if inbound.Tag == VPNProxyTag && inbound.Listen == VPNProxyListen && inbound.ListenPort == port &&
-				proxyOwned(ctx, runner, addr) {
-				return true, nil
-			}
-		}
-	}
-	return false, fmt.Errorf("cannot bind vpn_proxy_port %s: %w", addr, err)
+// LoopbackListener is a TCP port owned by a launchd job.
+type LoopbackListener struct {
+	Port  uint16
+	Tag   string
+	Field string
 }
 
-// WaitVPNProxy waits until the configured listener belongs to the sing-box
-// job, rather than accepting any process that happened to bind the port.
-func WaitVPNProxy(ctx context.Context, runner sysexec.Runner, port uint16) error {
-	if port == 0 {
+// CheckLoopbackPorts verifies each bind before deployment. It returns the
+// listeners we must verify again after reload because they are not yet live.
+func CheckLoopbackPorts(ctx context.Context, runner sysexec.Runner, listeners []LoopbackListener, previous []byte) ([]LoopbackListener, error) {
+	var newListeners []LoopbackListener
+	var installed struct{ Inbounds []Inbound }
+	var decoded bool
+	for _, spec := range listeners {
+		addr := proxyAddress(spec.Port)
+		listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp4", addr)
+		if err == nil {
+			if err := listener.Close(); err != nil {
+				return nil, err
+			}
+			newListeners = append(newListeners, spec)
+			continue
+		}
+		if !decoded {
+			if json.Unmarshal(previous, &installed) != nil {
+				installed.Inbounds = nil
+			}
+			decoded = true
+		}
+		if !reusesLoopbackPort(ctx, runner, addr, spec, installed.Inbounds) {
+			return nil, fmt.Errorf("cannot bind %s %s: %w", spec.Field, addr, err)
+		}
+	}
+	return newListeners, nil
+}
+
+func reusesLoopbackPort(ctx context.Context, runner sysexec.Runner, addr string, spec LoopbackListener, previous []Inbound) bool {
+	for _, inbound := range previous {
+		if inbound.Tag == spec.Tag && inbound.Listen == VPNProxyListen && inbound.ListenPort == spec.Port {
+			return sysexec.OwnsTCPListener(ctx, runner, sysexec.SystemTarget(), addr)
+		}
+	}
+	return false
+}
+
+// WaitLoopbackPorts verifies that the expected launchd job owns each listener.
+func WaitLoopbackPorts(ctx context.Context, runner sysexec.Runner, target string, listeners []LoopbackListener) error {
+	if len(listeners) == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	addr := proxyAddress(port)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	for !proxyOwned(ctx, runner, addr) {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("sing-box did not start VPN proxy at %s: %w", addr, ctx.Err())
-		case <-ticker.C:
+	for _, spec := range listeners {
+		addr := proxyAddress(spec.Port)
+		for !sysexec.OwnsTCPListener(ctx, runner, target, addr) {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("%s did not start %s at %s: %w", target, spec.Field, addr, ctx.Err())
+			case <-ticker.C:
+			}
 		}
 	}
 	return nil
@@ -66,23 +87,4 @@ func WaitVPNProxy(ctx context.Context, runner sysexec.Runner, port uint16) error
 
 func proxyAddress(port uint16) string {
 	return net.JoinHostPort(VPNProxyListen, strconv.Itoa(int(port)))
-}
-
-func proxyOwned(ctx context.Context, runner sysexec.Runner, addr string) bool {
-	status, err := runner.Run(ctx, "launchctl", "print", sysexec.SystemTarget())
-	if err != nil {
-		return false
-	}
-	for line := range strings.SplitSeq(string(status), "\n") {
-		pid, ok := strings.CutPrefix(strings.TrimSpace(line), "pid = ")
-		if !ok {
-			continue
-		}
-		if value, err := strconv.Atoi(pid); err != nil || value <= 1 {
-			return false
-		}
-		output, err := runner.Run(ctx, "/usr/sbin/lsof", "-nP", "-t", "-a", "-p", pid, "-iTCP@"+addr, "-sTCP:LISTEN")
-		return err == nil && strings.TrimSpace(string(output)) == pid
-	}
-	return false
 }

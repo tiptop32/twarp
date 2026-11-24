@@ -29,7 +29,8 @@ type command struct {
 var commands = []command{
 	{"up", "turn the tunnel on (apply and start)"},
 	{"down", "turn the tunnel off"},
-	{"import", "import a VPN URI as the vpn outbound"},
+	{"import", "import a VPN URI from stdin [--name TUNNEL]"},
+	{"xray", "start or remove the Xray login agent for an additional VPN"},
 	{"render", "render sing-box config.json"},
 	{"apply", "render, check and hot-reload sing-box"},
 	{"install", "install the sing-box launchd daemon"},
@@ -129,6 +130,8 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 		return runDown(args[1:], stdout, stderr, deps)
 	case "import":
 		return runImport(args[1:], stdout, stderr, deps)
+	case "xray":
+		return runXray(args[1:], stdout, stderr, deps)
 	case "render":
 		return runRender(args[1:], stdout, stderr, deps)
 	case "apply":

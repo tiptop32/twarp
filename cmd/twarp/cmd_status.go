@@ -13,7 +13,7 @@ import (
 func runStatus(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	flags := flag.NewFlagSet("twarp status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	checkNetwork := flags.Bool("net", false, "check the public egress address and the path through the gateway")
+	checkNetwork := flags.Bool("net", false, "compare public egress with the primary VPN server and check the gateway path")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0

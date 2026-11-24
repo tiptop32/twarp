@@ -4,6 +4,7 @@ GEO_EVAL_SCRIPT := ./evals/launchd_geo/run.sh
 EVAL_SCRIPTS := ./evals/config_deployment/run.sh ./evals/gateway_state_recovery/run.sh ./evals/lifecycle/run.sh ./evals/mcp_tool_choice/run.sh ./evals/status/run.sh
 VPN_PROXY_EVAL_SCRIPT := ./evals/vpn_proxy/run.sh
 EVAL_SCRIPTS += $(VPN_PROXY_EVAL_SCRIPT)
+EVAL_SCRIPTS += ./evals/multi_vpn/run.sh
 PREFIX ?= /usr/local
 
 build:
@@ -22,6 +23,7 @@ uninstall-bin:
 test:
 	go test ./...
 	bash scripts/test-make-eval.sh
+	bash scripts/test-mcp-eval.sh
 
 integration:
 	go test -tags integration ./...
@@ -53,7 +55,7 @@ eval-agent-lb-vpn-proxy:
 
 lint:
 	golangci-lint run --build-tags integration ./...
-	shellcheck .githooks/pre-commit $(EVAL_SCRIPTS) $(GEO_EVAL_SCRIPT) scripts/smoke.sh scripts/test-make-eval.sh
+	shellcheck .githooks/pre-commit $(EVAL_SCRIPTS) $(GEO_EVAL_SCRIPT) scripts/smoke.sh scripts/test-make-eval.sh scripts/test-mcp-eval.sh
 
 # Scan both committed history and the working tree: the pre-commit hook runs
 # before the new content exists in history.

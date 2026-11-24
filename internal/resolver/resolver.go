@@ -1,11 +1,10 @@
-// Package resolver keeps macOS per-domain resolver files for gateway domains.
+// Package resolver keeps macOS per-domain resolver files for selected domains.
 //
 // macOS sends DNS for a domain listed in /etc/resolver to that file's
 // nameserver. Without such a file, the system resolver may reach a DNS server
 // on the local subnet directly: the connected route is more specific than the
 // TUN routes, so the query bypasses sing-box and gateway names fail to resolve.
-// Each file written here points at the TUN DNS address, where sing-box hijacks
-// the query and resolves it through the gateway DNS.
+// Each file points at the TUN DNS address so sing-box can apply its DNS rules.
 package resolver
 
 import (

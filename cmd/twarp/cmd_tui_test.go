@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -223,11 +224,27 @@ func TestTUIDashboardShowsStatusRoutesAndTraffic(t *testing.T) {
 	}
 }
 
+func TestTUISeparatesNamedVPNConnectionCountsAndImportErrors(t *testing.T) {
+	backend := dashboardBackend()
+	backend.routes.Tunnels = []app.VPNTunnel{
+		{Name: "second", Tag: "vpn-second", Protocol: "VLESS Reality"},
+		{Name: "other", Tag: "vpn-other-long-name-for-narrow-terminals", Problem: "invalid VPN URI"},
+	}
+	backend.connections = append(backend.connections, singbox.Connection{Chains: []string{"vpn-second"}})
+	model := send(t, initModel(t, backend), tea.WindowSizeMsg{Width: 60, Height: 35})
+	view := plainView(model)
+	for _, want := range []string{`1:vpn-second\s+VLESS Reality`, `2:vpn-other-lon…\s+invalid VPN URI`, `1: 1 conn\s+vpn-second`, `2: 0 conns\s+vpn-other`, `vpn\s+egress not checked \[n\]\s+2 conns`} {
+		if !regexp.MustCompile(want).MatchString(view) {
+			t.Errorf("missing %s in narrow dashboard:\n%s", want, view)
+		}
+	}
+}
+
 func TestTUINetCheckShowsEgress(t *testing.T) {
 	backend := dashboardBackend()
 	backend.netStatus = backend.status
 	backend.netStatus.Checks = append(backend.netStatus.Checks, app.Check{Level: app.LevelOK, Name: "egress", Detail: "egress via vpn 203.0.113.9"})
-	backend.netStatus.EgressIP, backend.netStatus.EgressViaVPN = "203.0.113.9", true
+	backend.netStatus.EgressIP = "203.0.113.9"
 	model := initModel(t, backend)
 	model = send(t, model, key("n"))
 	if view := plainView(model); !strings.Contains(view, "egress 203.0.113.9   OK") || strings.Contains(view, "checking egress") {

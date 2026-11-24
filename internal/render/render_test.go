@@ -315,6 +315,97 @@ func TestRenderedConfigPassesSingBoxCheck(t *testing.T) {
 	}
 }
 
+func TestRenderedNamedVLESSAndHTTPSDNSPassSingBoxCheck(t *testing.T) {
+	out := t.TempDir()
+	createGeoRuleSets(t, out)
+	cfg := testConfig()
+	cfg.VPN.DNS = "https://dns.example:8443/dns-query"
+	cfg.VPN.Tunnels = []config.Tunnel{{Name: "secondary", DNS: "https://dns2.example:8444/dns-query", DNSExplicit: true, Domains: []string{"ai.example"}, ProcessPathRegex: []string{"^/bin/example$"}}}
+	secrets := testSecrets(t)
+	secrets.VPNURIs = map[string]string{"secondary": secrets.VPNURI}
+	opts := render.Options{Paths: config.Paths{Out: out}, Inbound: render.InboundTUN}
+	data, err := render.Render(cfg, secrets, testPrefixes(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generated singbox.Config
+	if err := json.Unmarshal(data, &generated); err != nil {
+		t.Fatal(err)
+	}
+	for _, server := range generated.DNS.Servers {
+		if server.Tag == "remote" && server.ServerPort != 0 {
+			t.Fatal("primary resolver must retain legacy HTTPS port")
+		}
+	}
+	named := generated.DNS.Servers[len(generated.DNS.Servers)-1]
+	if named.Tag != "vpn-secondary-dns" || named.Type != "https" || named.ServerPort != 8444 || named.Detour != "vpn-secondary" {
+		t.Fatalf("wrong named DNS dial target: %+v", named)
+	}
+	if err := render.WriteRuleSet(opts.Paths.RulesDir(), testPrefixes()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(out, "config.json")
+	if err := render.WriteConfig(path, data); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(singBox(t), "check", "--config", path).CombinedOutput(); err != nil {
+		t.Fatalf("sing-box check: %v\n%s", err, output)
+	}
+}
+
+func TestLegacyPrimaryVPNRulesKeepTheirPlaceBehindNamedTunnels(t *testing.T) {
+	out := t.TempDir()
+	createGeoPlaceholders(t, out)
+	for _, tag := range []string{"geosite-google", "geosite-anthropic"} {
+		if err := os.WriteFile(filepath.Join(out, "geo", tag+".srs"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, named := range []bool{false, true} {
+		text := "gateway:\n  socks: 192.0.2.10:1080\n  domains: [gateway.example]\n  dns: 192.0.2.53\ndirect:\n  local_domains: [home.arpa]\nvpn:\n  force_provider_domains: true\n  cidrs: [198.51.100.7/24]\n  process_path_regex: ['^/bin/primary$']\n"
+		secrets := testSecrets(t)
+		if named {
+			text += "  tunnels:\n    - name: secondary\n      domains: [ai.example]\n      process_path_regex: ['^/bin/secondary$']\n"
+			secrets.VPNURIs = map[string]string{"secondary": secrets.VPNURI}
+		}
+		path := filepath.Join(out, "twarp.yaml")
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := render.Render(cfg, secrets, nil, render.Options{Paths: config.Paths{Out: out}, Inbound: render.InboundTUN})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rendered singbox.Config
+		if err := json.Unmarshal(data, &rendered); err != nil {
+			t.Fatal(err)
+		}
+		var route, dns []string
+		for _, rule := range rendered.Route.Rules {
+			switch rule.Outbound {
+			case "vpn", "vpn-secondary":
+				route = append(route, rule.Outbound+":"+strings.Join(append(append(append(append([]string{}, rule.RuleSet...), rule.IPCIDR...), rule.ProcessPathRegex...), rule.DomainSuffix...), ","))
+			}
+		}
+		for _, rule := range rendered.DNS.Rules {
+			dns = append(dns, rule.Server)
+		}
+		wantRoute := "vpn:geosite-google,geosite-anthropic vpn:198.51.100.0/24 vpn:^/bin/primary$"
+		wantDNS := "gateway remote local remote direct direct"
+		if named {
+			wantRoute = "vpn-secondary:^/bin/secondary$ vpn-secondary:ai.example " + wantRoute
+			wantDNS = "gateway local vpn-secondary-dns vpn-secondary-dns remote remote direct direct"
+		}
+		if strings.Join(route, " ") != wantRoute || strings.Join(dns, " ") != wantDNS || len(rendered.Route.RuleSets) != 5 {
+			t.Fatalf("named=%t: unexpected primary/secondary rules: route=%v DNS=%v", named, route, dns)
+		}
+	}
+}
+
 func TestAtomicWritersModesAndOnChange(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "nested", "config.json")

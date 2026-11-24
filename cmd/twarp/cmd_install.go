@@ -44,7 +44,10 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 			return state.LockShared(paths.LockFile())
 		},
 		GeoUpdate: func(ctx context.Context) error {
-			_, err := geo.Update(ctx, geo.Options{Dir: paths.GeoDir(), AuditFile: app.RootAuditFile(deps.Sys)})
+			_, err := geo.Update(ctx, geo.Options{
+				Dir: paths.GeoDir(), AuditFile: app.RootAuditFile(deps.Sys),
+				Sources: geo.RequiredSources(cfg.VPN.ForceProviderDomains),
+			})
 			return err
 		},
 		RenderConfig: func() ([]byte, error) {
@@ -66,7 +69,7 @@ func runInstall(args []string, stdout, stderr io.Writer, deps cliDeps) int {
 	if err := launchd.Install(context.Background(), deps.launchd(), options); err != nil {
 		return lifecycleError("install", stderr, err)
 	}
-	note, err := deps.app(app.ActorCLI).SyncResolvers(context.Background(), cfg.Gateway.Domains)
+	note, err := deps.app(app.ActorCLI).SyncResolvers(context.Background(), cfg)
 	if err != nil {
 		return lifecycleError("install", stderr, fmt.Errorf("services installed, but %w", err))
 	}

@@ -16,6 +16,26 @@ import (
 	"github.com/tiptop32/twarp/internal/geo"
 )
 
+type ruleSetTransport func(*http.Request) (*http.Response, error)
+
+func (f ruleSetTransport) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
+
+func TestDefaultUpdateRestoresPrimaryVPNProviderRuleSets(t *testing.T) {
+	dir := t.TempDir()
+	client := &http.Client{Transport: ruleSetTransport(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("SRS-" + filepath.Base(req.URL.Path)))}, nil
+	})}
+	if _, err := geo.Update(context.Background(), geo.Options{Dir: dir, Client: client}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"geosite-google.srs", "geosite-anthropic.srs"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(data) != "SRS-"+name {
+			t.Fatalf("provider rule-set %s not restored: %v", name, err)
+		}
+	}
+}
+
 func TestUpdateReplacesRuleSetAndReportsStoredMetadata(t *testing.T) {
 	t.Parallel()
 

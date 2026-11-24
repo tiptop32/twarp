@@ -40,7 +40,7 @@ func TestRunImportWritesOwnerOnlySecretsWithoutLeakingURI(t *testing.T) {
 			t.Fatalf("command output exposes a VPN credential: %q", stdout.String()+stderr.String())
 		}
 	}
-	if want := "imported vpn outbound: vpn.example.com:443 (reality, sni example.com)"; !strings.Contains(stdout.String(), want) {
+	if want := "imported vpn outbound (VLESS Reality)"; !strings.Contains(stdout.String(), want) {
 		t.Errorf("stdout = %q, want %q", stdout.String(), want)
 	}
 
@@ -84,6 +84,57 @@ func TestRunImportWritesOwnerOnlySecretsWithoutLeakingURI(t *testing.T) {
 	}
 }
 
+func TestRunImportReplacesOnlyNamedVPN(t *testing.T) {
+	home := t.TempDir()
+	system := cliTestSys{euid: 501, env: map[string]string{"TWARP_HOME": home, "TWARP_OUT": filepath.Join(home, "out")}}
+	path := filepath.Join(home, "secrets.yaml")
+	before := config.Secrets{VPNURI: "existing primary", ClashSecret: "existing controller", GatewaySocksUser: "gateway", GatewaySocksPassword: "existing gateway", VPNURIs: map[string]string{"other": "existing other", "second": "old second"}}
+	if err := config.SaveSecrets(path, before); err != nil {
+		t.Fatal(err)
+	}
+	raw, id, publicKey := syntheticVPNURI(t)
+	stdout, stderr, code := runCLIForTest([]string{"import", "--name", "second"}, cliDeps{Sys: system, Stdin: strings.NewReader(raw)})
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "vpn-second") || strings.Contains(stdout, id) || strings.Contains(stdout, publicKey) {
+		t.Fatalf("named import failed or exposed credentials, exit %d", code)
+	}
+	got, err := config.LoadSecrets(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VPNURI != before.VPNURI || got.ClashSecret != before.ClashSecret || got.GatewaySocksUser != before.GatewaySocksUser || got.GatewaySocksPassword != before.GatewaySocksPassword || got.VPNURIs["other"] != before.VPNURIs["other"] || got.VPNURIs["second"] != raw {
+		t.Fatal("named import did not replace only the selected URI")
+	}
+}
+
+func TestConcurrentNamedImportsDoNotDropCredentials(t *testing.T) {
+	home := t.TempDir()
+	system := cliTestSys{euid: 501, env: map[string]string{"TWARP_HOME": home, "TWARP_OUT": filepath.Join(home, "out")}}
+	raw, _, _ := syntheticVPNURI(t)
+	const count = 12
+	start := make(chan struct{})
+	results := make(chan int, count)
+	for i := range count {
+		go func() {
+			<-start
+			_, _, code := runCLIForTest([]string{"import", "--name", fmt.Sprint(i)}, cliDeps{Sys: system, Stdin: strings.NewReader(raw), Random: bytes.NewReader(make([]byte, 32))})
+			results <- code
+		}()
+	}
+	close(start)
+	for range count {
+		if code := <-results; code != 0 {
+			t.Errorf("import exited %d", code)
+		}
+	}
+	secrets, err := config.LoadSecrets(filepath.Join(home, "secrets.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets.VPNURIs) != count {
+		t.Fatalf("stored %d of %d named VPNs", len(secrets.VPNURIs), count)
+	}
+}
+
 func TestRunImportRejectsArgumentsEmptyInputAndRoot(t *testing.T) {
 	base := t.TempDir()
 	system := cliTestSys{euid: 501, env: map[string]string{
@@ -99,8 +150,10 @@ func TestRunImportRejectsArgumentsEmptyInputAndRoot(t *testing.T) {
 		wantErr  string
 	}{
 		{name: "argument", args: []string{"import", "secret"}, system: system, wantCode: 2, wantErr: "the URI is read from stdin only"},
+		{name: "secret as name", args: []string{"import", "--name", "vless://synthetic"}, system: system, wantCode: 2, wantErr: "the URI is read from stdin only"},
 		{name: "empty stdin", args: []string{"import"}, stdin: " \n", system: system, wantCode: 1, wantErr: "paste the VPN URI on stdin: twarp import < key.txt"},
 		{name: "root", args: []string{"import"}, stdin: "secret", system: cliTestSys{euid: 0}, wantCode: 1, wantErr: "do not run import with sudo"},
+		{name: "named root", args: []string{"import", "--name", "second"}, system: cliTestSys{euid: 0}, wantCode: 1, wantErr: "do not run import with sudo"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

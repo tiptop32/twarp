@@ -166,3 +166,36 @@ func TestClashRunningTreatsUnauthorizedAsRunning(t *testing.T) {
 		t.Fatal("Running() = false for a 401 response, want true")
 	}
 }
+
+func TestClashXrayProbeRejectsStaleTransportAndDownstreamFailure(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, proxyType string
+		status          int
+		wantError       string
+	}{
+		{"old VLESS", "VLESS", http.StatusOK, "not loaded as a Shadowsocks outbound"},
+		{"listener with broken upstream", "Shadowsocks", http.StatusServiceUnavailable, "503"},
+		{"working upstream", "Shadowsocks", http.StatusOK, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/proxies/vpn-second":
+					_, _ = w.Write([]byte(`{"type":"` + tc.proxyType + `"}`))
+				case "/proxies/vpn-second/delay":
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(`{"delay":42}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			client := singbox.Clash{Addr: server.Listener.Addr().String()}
+			err := client.ProbeXray(t.Context(), "vpn-second")
+			if tc.wantError == "" && err != nil || tc.wantError != "" && (err == nil || !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("ProbeXray error = %v, want %q", err, tc.wantError)
+			}
+		})
+	}
+}

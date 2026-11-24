@@ -34,6 +34,45 @@ func TestRunRenderPrintsMaskedJSONWithoutRoot(t *testing.T) {
 	}
 }
 
+func TestRunRenderMasksNamedVPN(t *testing.T) {
+	fixture := newCLIRenderFixture(t, 501)
+	path := filepath.Join(fixture.home, "twarp.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, "vpn:\n  tunnels:\n    - name: second\n      domains: [ai.example]\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secretsPath := filepath.Join(fixture.home, "secrets.yaml")
+	secrets, err := config.LoadSecrets(secretsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, id, publicKey := syntheticVPNURI(t)
+	secrets.VPNURIs = map[string]string{"second": raw}
+	if err := config.SaveSecrets(secretsPath, secrets); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := runCLIForTest([]string{"render"}, fixture.deps)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, `"vpn-second"`) || strings.Count(stdout, `"***"`) != 7 {
+		t.Fatalf("expected masked config for both tunnels; exit %d", code)
+	}
+	for _, secret := range []string{id, publicKey, fixture.uuid, fixture.publicKey} {
+		if strings.Contains(stdout, secret) {
+			t.Fatal("render exposed a VPN credential")
+		}
+	}
+	secrets.VPNURIs["second"] = "invalid-private-marker"
+	if err := config.SaveSecrets(secretsPath, secrets); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code = runCLIForTest([]string{"render"}, fixture.deps)
+	if code == 0 || !strings.Contains(stderr, "second") || strings.Contains(stderr, "invalid-private-marker") {
+		t.Fatal("invalid named VPN did not produce a redacted, tunnel-specific error")
+	}
+}
+
 func TestRunRenderOutWritesFullCheckableSet(t *testing.T) {
 	fixture := newCLIRenderFixture(t, 501)
 	destination := filepath.Join(t.TempDir(), "rendered")
