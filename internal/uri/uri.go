@@ -20,7 +20,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 // a REALITY client without uTLS ("uTLS is required by reality client").
 const defaultFingerprint = "chrome"
 
-// Parse converts a VLESS REALITY URI into a VPN outbound.
+// Parse converts a VLESS REALITY or TLS URI into a VPN outbound.
 func Parse(raw string) (singbox.Outbound, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -61,13 +61,6 @@ func Parse(raw string) (singbox.Outbound, error) {
 		return singbox.Outbound{}, errors.New("flow must be xtls-rprx-vision or empty")
 	}
 	publicKey := query.Get("pbk")
-	if publicKey == "" {
-		return singbox.Outbound{}, errors.New("public key is required")
-	}
-	decodedPublicKey, err := base64.RawURLEncoding.DecodeString(publicKey)
-	if err != nil || len(decodedPublicKey) != 32 {
-		return singbox.Outbound{}, errors.New("invalid public key")
-	}
 	shortID := query.Get("sid")
 	if _, err := hex.DecodeString(shortID); err != nil {
 		return singbox.Outbound{}, errors.New("invalid short ID")

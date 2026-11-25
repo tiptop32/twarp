@@ -27,8 +27,8 @@ func LocalOutbound(tunnel config.Tunnel, clashSecret string) singbox.Outbound {
 	}
 }
 
-// ClientConfig renders Xray's single VLESS outbound, dialing the local sing-box
-// bridge instead of making an external socket that could be recaptured by TUN.
+// ClientConfig renders Xray's single VLESS outbound, using the supplied
+// transport metadata while retaining the local authenticated listener.
 func ClientConfig(tunnel config.Tunnel, clashSecret string, vless singbox.Outbound) ([]byte, error) {
 	local := LocalOutbound(tunnel, clashSecret)
 	// Xray's bare Vision option rejects UDP/443 locally. With the suffix it
