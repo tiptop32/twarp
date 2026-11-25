@@ -248,6 +248,67 @@ func TestRenderRejectsInvalidVPNInputsWithoutLeakingURI(t *testing.T) {
 	})
 }
 
+func TestRenderXHTTPRequiresXrayAndKeepsLocalBridge(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		primary   bool
+		xray      bool
+		wantError string
+	}{
+		{name: "primary", primary: true, wantError: "primary VPN does not support XHTTP"},
+		{name: "sing-box tunnel", wantError: "XHTTP requires xray"},
+		{name: "Xray tunnel", xray: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			out := t.TempDir()
+			createGeoPlaceholders(t, out)
+			cfg, secrets := testConfig(), testSecrets(t)
+			query := url.Values{"security": {"tls"}, "type": {"xhttp"}, "sni": {"tls.example.com"}, "extra": {`{"noGRPCHeader":true}`}}
+			raw := "vless://" + "11111111-1111-4111-8111-111111111111" + "@xhttp.example.com:8443?" + query.Encode()
+			if test.primary {
+				secrets.VPNURI = raw
+			} else {
+				tunnel := config.Tunnel{Name: "second", DNS: "https://dns.example.com/dns-query", Domains: []string{"selected.example"}}
+				if test.xray {
+					tunnel.Xray = &config.XrayPorts{Listen: 19080, Bridge: 19081}
+				}
+				cfg.VPN.Tunnels = []config.Tunnel{tunnel}
+				secrets.VPNURIs = map[string]string{"second": raw}
+			}
+			data, err := render.Render(cfg, secrets, testPrefixes(), render.Options{Paths: config.Paths{Out: out}, Inbound: render.InboundTUN})
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("Render() error = %v, want %q", err, test.wantError)
+				}
+				if strings.Contains(err.Error(), raw) || strings.Contains(err.Error(), "11111111-1111-4111-8111-111111111111") {
+					t.Fatal("render validation exposed profile credentials")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got singbox.Config
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			local := outboundByTag(t, got.Outbounds, "vpn-second")
+			if local.Type != "shadowsocks" || local.Server != "127.0.0.1" || local.ServerPort != 19080 || local.Password == "" || local.XHTTP != nil || local.TLS != nil {
+				t.Fatal("XHTTP transport leaked into sing-box instead of the authenticated local hop")
+			}
+			for _, inbound := range got.Inbounds {
+				if inbound.Tag == "xray-bridge-second" {
+					if inbound.Type != "direct" || inbound.Listen != "127.0.0.1" || inbound.ListenPort != 19081 || inbound.Network != "tcp" || inbound.OverrideAddress != "xhttp.example.com" || inbound.OverridePort != 8443 {
+						t.Fatal("XHTTP bridge lost its fixed original upstream destination")
+					}
+					return
+				}
+			}
+			t.Fatal("XHTTP tunnel is missing its fixed-destination bridge")
+		})
+	}
+}
+
 func TestRenderRuleSetMatchesGolden(t *testing.T) {
 	got, err := render.RenderRuleSet(testPrefixes())
 	if err != nil {

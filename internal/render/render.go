@@ -68,6 +68,9 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 	if err != nil {
 		return nil, fmt.Errorf("parse VPN URI: %w", err)
 	}
+	if vpn.Network == "xhttp" {
+		return nil, errors.New("primary VPN does not support XHTTP; use a named tunnel with xray configured")
+	}
 	// Keep the historical default HTTPS port for the primary resolver.
 	dns, err := vpnDNS(cfg.VPN.DNS, "remote", "vpn", false)
 	if err != nil {
@@ -97,6 +100,9 @@ func Render(cfg config.Config, secrets config.Secrets, prefixes []netip.Prefix, 
 		outbound, err := uri.Parse(raw)
 		if err != nil {
 			return nil, fmt.Errorf("VPN tunnel %q: invalid VPN URI", tunnel.Name)
+		}
+		if outbound.Network == "xhttp" && tunnel.Xray == nil {
+			return nil, fmt.Errorf("VPN tunnel %q: XHTTP requires xray configured", tunnel.Name)
 		}
 		outbound.Tag = tunnel.Tag()
 		if tunnel.Xray != nil {

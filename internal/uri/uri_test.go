@@ -215,6 +215,69 @@ func TestParseRejectsInvalidURIs(t *testing.T) {
 	}
 }
 
+func TestParseRejectsUnsafeXHTTPProfiles(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		query  url.Values
+		suffix string
+		want   string
+	}{
+		{name: "Vision flow", query: url.Values{"flow": {"xtls-rprx-vision"}}, want: "empty flow"},
+		{name: "REALITY XHTTP", query: url.Values{"security": {"reality"}}, want: "REALITY requires tcp"},
+		{name: "stale public key", query: url.Values{"pbk": {"synthetic-secret"}}, want: "REALITY parameters"},
+		{name: "stale short ID", query: url.Values{"sid": {"0123abcd"}}, want: "REALITY parameters"},
+		{name: "invalid mode", query: url.Values{"mode": {"stream-down"}}, want: "invalid xhttp mode"},
+		{name: "HTTP3", query: url.Values{"alpn": {"h3"}}, want: "TCP bridge"},
+		{name: "mixed HTTP3", query: url.Values{"alpn": {"h2,h3"}}, want: "TCP bridge"},
+		{name: "empty ALPN", query: url.Values{"alpn": {""}}, want: "TCP bridge"},
+		{name: "empty extra", query: url.Values{"extra": {""}}, want: "JSON object"},
+		{name: "malformed extra", query: url.Values{"extra": {`{"synthetic-secret":`}}, want: "JSON object"},
+		{name: "array extra", query: url.Values{"extra": {`[]`}}, want: "JSON object"},
+		{name: "null extra", query: url.Values{"extra": {`null`}}, want: "JSON object"},
+		{name: "scalar extra", query: url.Values{"extra": {`42`}}, want: "JSON object"},
+		{name: "multiple extra values", query: url.Values{"extra": {`{} {}`}}, want: "JSON object"},
+		{name: "separate download route", query: url.Values{"extra": {`{"downloadSettings":{"address":"elsewhere.example","port":443}}`}}, want: "local bridge"},
+		{name: "case insensitive download route", query: url.Values{"extra": {`{"DOWNLOADSETTINGS":{"address":"elsewhere.example","port":443}}`}}, want: "local bridge"},
+		{name: "duplicate extra", query: url.Values{"extra": {`{}`, `{}`}}, want: "duplicate"},
+		{name: "extra on TCP", query: url.Values{"security": {"reality"}, "type": {"tcp"}, "pbk": {"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}, "extra": {`{}`}}, want: "xhttp parameters"},
+		{name: "malformed query delimiter", suffix: "&extra={};ignored=yes", want: "query parameters"},
+		{name: "bad query encoding", suffix: "&extra=%xx", want: "query parameters"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query := url.Values{"security": {"tls"}, "type": {"xhttp"}, "sni": {"tls.example.com"}}
+			for key, values := range test.query {
+				query[key] = values
+			}
+			raw := "vless://" + "11111111-1111-4111-8111-111111111111" + "@vpn.example.com:443?" + query.Encode() + test.suffix
+			_, err := uri.Parse(raw)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Parse() error = %v, want %q", err, test.want)
+			}
+			if strings.Contains(err.Error(), "synthetic-secret") || strings.Contains(err.Error(), "11111111-1111-4111-8111-111111111111") {
+				t.Fatal("validation error exposes profile credentials")
+			}
+		})
+	}
+}
+
+func TestParseAllowsEmptyXHTTPExtraObject(t *testing.T) {
+	t.Parallel()
+	for _, extra := range []string{`{}`, `{"downloadSettings":null}`} {
+		query := url.Values{
+			"security": {"tls"}, "type": {"xhttp"}, "sni": {"tls.example.com"}, "extra": {extra},
+		}
+		outbound, err := uri.Parse("vless://" + "11111111-1111-4111-8111-111111111111" + "@vpn.example.com:443?" + query.Encode())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outbound.XHTTP == nil || string(outbound.XHTTP.Extra) != extra {
+			t.Fatal("empty or null download settings were not preserved")
+		}
+	}
+}
+
 func TestParseAllowsEmptyOptionalParameters(t *testing.T) {
 	t.Parallel()
 

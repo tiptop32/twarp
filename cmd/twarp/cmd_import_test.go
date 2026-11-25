@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -103,6 +104,68 @@ func TestRunImportReplacesOnlyNamedVPN(t *testing.T) {
 	}
 	if got.VPNURI != before.VPNURI || got.ClashSecret != before.ClashSecret || got.GatewaySocksUser != before.GatewaySocksUser || got.GatewaySocksPassword != before.GatewaySocksPassword || got.VPNURIs["other"] != before.VPNURIs["other"] || got.VPNURIs["second"] != raw {
 		t.Fatal("named import did not replace only the selected URI")
+	}
+}
+
+func TestRunImportXHTTPRequiresConfiguredXrayBeforePersistence(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		target    string
+		xray      bool
+		noConfig  bool
+		wantError bool
+	}{
+		{name: "primary", xray: true, wantError: true},
+		{name: "sing-box tunnel", target: "second", wantError: true},
+		{name: "unknown tunnel", target: "unknown", xray: true, wantError: true},
+		{name: "missing config", target: "second", noConfig: true, wantError: true},
+		{name: "Xray tunnel", target: "second", xray: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			system := cliTestSys{euid: 501, env: map[string]string{"TWARP_HOME": home, "TWARP_OUT": filepath.Join(home, "out")}}
+			if !test.noConfig {
+				text := "gateway:\n  socks: 192.0.2.10:1080\n  domains: [intra.example]\n  dns: 100.64.0.53\nvpn:\n  tunnels:\n    - name: second\n      domains: [selected.example]\n"
+				if test.xray {
+					text += "      xray: {listen_port: 19080, bridge_port: 19081}\n"
+				}
+				if err := os.WriteFile(filepath.Join(home, "twarp.yaml"), []byte(text), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(home, "secrets.yaml")
+			before := config.Secrets{VPNURI: "existing primary", ClashSecret: "existing controller", GatewaySocksUser: "gateway", GatewaySocksPassword: "existing gateway", VPNURIs: map[string]string{"other": "existing other", "second": "old second"}}
+			if err := config.SaveSecrets(path, before); err != nil {
+				t.Fatal(err)
+			}
+			query := url.Values{"security": {"tls"}, "type": {"xhttp"}, "sni": {"tls.example.com"}, "extra": {`{"noGRPCHeader":true}`}}
+			raw := "vless://" + "11111111-1111-4111-8111-111111111111" + "@vpn.example.com:443?" + query.Encode()
+			args := []string{"import"}
+			if test.target != "" {
+				args = append(args, "--name", test.target)
+			}
+			stdout, stderr, code := runCLIForTest(args, cliDeps{Sys: system, Stdin: strings.NewReader(raw)})
+			if test.wantError {
+				if code != 1 || !strings.Contains(stderr, "XHTTP requires") || stdout != "" {
+					t.Fatalf("unsupported XHTTP import = (%d, %q, %q)", code, stdout, stderr)
+				}
+			} else if code != 0 || stderr != "" {
+				t.Fatalf("configured XHTTP import = (%d, %q)", code, stderr)
+			}
+			if strings.Contains(stdout+stderr, raw) || strings.Contains(stdout+stderr, "11111111-1111-4111-8111-111111111111") {
+				t.Fatal("import output exposed the VPN profile")
+			}
+			got, err := config.LoadSecrets(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !test.wantError {
+				before.VPNURIs["second"] = raw
+			}
+			if !reflect.DeepEqual(got, before) {
+				t.Fatal("XHTTP import changed credentials outside the supported selected profile")
+			}
+		})
 	}
 }
 

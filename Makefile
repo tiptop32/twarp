@@ -24,6 +24,7 @@ test:
 	go test ./...
 	bash scripts/test-make-eval.sh
 	bash scripts/test-mcp-eval.sh
+	bash scripts/test-reinstall.sh
 
 integration:
 	go test -tags integration ./...
