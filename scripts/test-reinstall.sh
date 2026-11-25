@@ -7,8 +7,19 @@ if ((EUID == 0)); then
 fi
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-work="$(mktemp -d "${TMPDIR:-/tmp}/twarp-reinstall-test.XXXXXX")"
-trap 'rm -R -- "$work"' EXIT
+# Keep Unix socket paths below macOS's sockaddr_un limit, even with a long TMPDIR.
+work="$(mktemp -d /tmp/twarp-reinstall-test.XXXXXX)"
+fixture_pid=""
+cleanup() {
+  if [[ -n $fixture_pid ]]; then
+    kill "$fixture_pid" 2>/dev/null || true
+    wait "$fixture_pid" 2>/dev/null || true
+  fi
+  rm -R -- "$work"
+}
+trap cleanup EXIT
+export REAL_PERL="$(command -v perl)"
+real_sleep="$(command -v sleep)"
 mkdir -p "$work/repo/scripts" "$work/bin" "$work/home/.config/twarp" "$work/tmp"
 cp "$root/scripts/reinstall.sh" "$work/repo/scripts/reinstall.sh"
 printf 'existing configuration\n' >"$work/home/.config/twarp/twarp.yaml"
@@ -77,11 +88,11 @@ if [[ ${FAIL_AT:-} == restart ]]; then exit 23; fi
 SH
 # sudo records the restart without ever contacting the real system launchctl.
 printf '#!/usr/bin/env bash\nexit 92\n' >"$work/bin/launchctl"
-cat >"$work/bin/nc" <<'SH'
+cat >"$work/bin/perl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ $# == 5 && $1 == -z && $2 == -w && $3 == 1 && $4 == -U && $5 == "$TWARP_SOCKET" ]]
 printf 'daemon ready probe\n' >>"$RUN_LOG"
+if [[ ${TEST_REAL_PROBE:-0} == 1 ]]; then exec "$REAL_PERL" "$@"; fi
 if [[ ${TEST_NOT_READY:-0} != 0 ]]; then
   count=0
   if [[ -f $TEST_WORK/probes ]]; then read -r count <"$TEST_WORK/probes"; fi
@@ -166,6 +177,85 @@ for ((probe = 0; probe < 20; probe++)); do
 done
 diff -u "$work/expected-timeout" "$RUN_LOG"
 assert_private_cleanup
+
+# Exercise the actual connect-only probe against a real Unix socket.
+# The listener sends nothing: readiness must not wait for daemon input or output.
+cat >"$work/socket-fixture.go" <<'GO'
+package main
+
+import (
+	"errors"
+	"io"
+	"net"
+	"os"
+	"time"
+)
+
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func main() {
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: os.Args[1], Net: "unix"})
+	must(err)
+	defer listener.Close()
+	if os.Args[2] == "stale" {
+		listener.SetUnlinkOnClose(false)
+		must(listener.Close())
+		return
+	}
+	must(os.WriteFile(os.Args[3], nil, 0600))
+	must(listener.SetDeadline(time.Now().Add(5 * time.Second)))
+	conn, err := listener.AcceptUnix()
+	must(err)
+	defer conn.Close()
+	must(conn.SetReadDeadline(time.Now().Add(3 * time.Second)))
+	var data [1]byte
+	n, err := conn.Read(data[:])
+	result := "probe did not disconnect before the server deadline\n"
+	if n == 0 && errors.Is(err, io.EOF) {
+		result = "closed\n"
+	}
+	must(os.WriteFile(os.Args[4], []byte(result), 0600))
+}
+GO
+go build -o "$work/socket-fixture" "$work/socket-fixture.go"
+"$work/socket-fixture" "$TWARP_SOCKET" listening "$work/listening" "$work/connection-result" >"$work/fixture.log" 2>&1 &
+fixture_pid=$!
+for ((attempt = 0; attempt < 100; attempt++)); do
+  if [[ -f $work/listening ]]; then break; fi
+  "$real_sleep" 0.05
+done
+[[ -f $work/listening ]]
+: >"$RUN_LOG"
+TEST_REAL_PROBE=1 /bin/bash "$work/repo/scripts/reinstall.sh" --xray google-ai >"$work/output" 2>&1
+diff -u "$work/expected" "$RUN_LOG"
+wait "$fixture_pid"
+fixture_pid=""
+[[ $(cat "$work/connection-result") == closed ]]
+assert_private_cleanup
+
+# A missing or stale socket must never admit apply, even with the real probe.
+for socket_state in missing stale; do
+  if [[ $socket_state == stale ]]; then
+    "$work/socket-fixture" "$TWARP_SOCKET" stale
+    [[ -S $TWARP_SOCKET ]]
+  else
+    [[ ! -e $TWARP_SOCKET ]]
+  fi
+  : >"$RUN_LOG"
+  if TEST_REAL_PROBE=1 /bin/bash "$work/repo/scripts/reinstall.sh" --xray google-ai >"$work/output" 2>&1; then
+    printf 'reinstall applied with a %s daemon socket\n' "$socket_state" >&2
+    exit 1
+  else
+    code=$?
+  fi
+  [[ $code == 1 ]]
+  diff -u "$work/expected-timeout" "$RUN_LOG"
+  assert_private_cleanup
+done
 
 # Every failing boundary must prevent all subsequent changes and verification.
 line=0

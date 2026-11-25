@@ -44,7 +44,7 @@ fi
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd -- "$root"
-for command in make sudo launchctl nc sleep; do
+for command in make sudo launchctl perl sleep; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'reinstall: required command is unavailable: %s\n' "$command" >&2
     exit 1
@@ -95,7 +95,13 @@ run_step() {
 wait_for_daemon() {
   local attempt
   for ((attempt = 0; attempt < 20; attempt++)); do
-    if nc -z -w 1 -U "${TWARP_SOCKET:-/var/run/twarp/twarpd.sock}"; then
+    # macOS nc cannot reliably probe Unix sockets or bound a silent peer.
+    # Connect only, with a process alarm bounding even a blocked connect.
+    if perl -MIO::Socket::UNIX -MSocket=SOCK_STREAM -e '
+      alarm 1;
+      my $socket = IO::Socket::UNIX->new(Type => SOCK_STREAM, Peer => $ARGV[0]);
+      exit($socket ? 0 : 1);
+    ' "${TWARP_SOCKET:-/var/run/twarp/twarpd.sock}"; then
       return 0
     fi
     sleep 1
