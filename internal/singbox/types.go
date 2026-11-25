@@ -51,6 +51,15 @@ type Outbound struct {
 	Flow           string       `json:"flow,omitempty"`
 	TLS            *OutboundTLS `json:"tls,omitempty"`
 	DomainResolver string       `json:"domain_resolver,omitempty"`
+	Network        string       `json:"network,omitempty"`
+	XHTTP          *XHTTP       `json:"xhttp,omitempty"`
+}
+
+// XHTTP describes the VLESS XHTTP transport used by Xray profiles.
+type XHTTP struct {
+	Host string `json:"host,omitempty"`
+	Path string `json:"path,omitempty"`
+	Mode string `json:"mode,omitempty"`
 }
 
 // OutboundTLS describes TLS settings for an outbound connection.
